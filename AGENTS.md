@@ -191,6 +191,21 @@ Android Studio 里对应设置为：**Settings → Build, Execution, Deployment 
 
 **改构建/配置文件必须用补丁工具，不要用 PowerShell 字符串替换**：`Set-Content -NoNewline`（默认 ANSI 编码）会把 `build.gradle.kts` 里的中文注释写坏，表现为 `Unexpected symbol`（`v1.0.11` 开发中真实踩过，整个仓库一度不可构建）。同类文件还有 `settings.gradle.kts`、`gradle.properties`、`.iss`、`.spec`。若要改版本号，用 `apply_patch` 精确改动对应行。
 
+**本机 git 配了本地代理，代理挂掉时推送与 Release API 都会失败**：`git config --global http.proxy` 指向 `http://127.0.0.1:7892`，该代理不可用时表现为 `TLS connect error: SSL routines::unexpected eof while reading`（openssl 后端）或 `schannel: failed to receive handshake`，而 `curl https://github.com/.../info/refs?service=git-upload-pack` 却是 200——据此可快速判断是代理而不是仓库/凭据问题。绕过方式（本机实测可用）：
+
+```powershell
+# 推送：显式清空代理
+git -c http.proxy= -c http.sslBackend=openssl push https://<token>@github.com/lsx626/fuxiaoxue.git HEAD:refs/heads/main
+# Release：PowerShell 的 Invoke-RestMethod 会走系统代理而失败，改用 curl
+curl.exe -sS -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" `
+  --data-binary "@release.json" https://api.github.com/repos/lsx626/fuxiaoxue/releases
+curl.exe -sS -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/octet-stream" `
+  --data-binary "@release/fuxiaoxue-vX.Y.Z.apk" `
+  "https://uploads.github.com/repos/lsx626/fuxiaoxue/releases/<id>/assets?name=fuxiaoxue-vX.Y.Z.apk"
+```
+
+另外：给发布产物算 SHA-256 时若文件刚被烟测/杀软占用会报 `cannot be read: being used by another process`，可直接取 GitHub 资产接口返回的 `digest` 字段（与本地一致时即可确认）。
+
 ### 5.2 Android
 
 构建基线：
