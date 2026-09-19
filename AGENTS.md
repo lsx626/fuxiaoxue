@@ -40,6 +40,13 @@
 - **字符显示异常**：新增 `office/TextSanitizer.kt`，处理 PPT 软换行 `\u000B`、OOXML 字面转义 `_x000B_`（**7 个字符**，早期实现按 8 个会吃掉下一个字）、控制字符，保留 emoji 代理对；应用于 PPT/Word/Excel 文本与文本预览；文本预览在 UTF-8 出现替换字符时回退 **GB18030**。
 - **PPT 缺件**：① 之前完全没渲染**母版/版式里的非占位装饰图形**（校徽、色带、装饰线），现已渲染（跳过占位符避免重影）；② **渐变填充的形状会整块消失**，现在用加权平均色兜底；③ 主题色经 `DrawPaint.applyColorTransform` 应用 tint/shade。
 
+`v1.0.12`（Android 1.0.12 / 桌面 1.0.8）收尾一批 P2/P1 缺口：
+
+- **桌面页面归档稳定命名**（原 P2「页面归档改为稳定覆盖/版本化」）：`SyncEngine._archive_pages` 不再每轮调用 `unique_path`，同一页面固定写同一个文件名，正文未变（用 `<!-- fxx-body-sha1:… -->` 标记比对）就不重写，正文变了用「临时文件 + `os.replace`」原子覆盖；同一轮内不同页面重名才追加 `(n)`，并顺带清理历史遗留的 `页面 - 标题 (n).html` 副本。回归见 `tests/test_page_archive_stability.py`。
+- **桌面课程目录定位复用引擎规则**（原 P1）：`MainWindow._course_local_dir` 现在对课程名与课程代码都调用 `sanitize_path_component`，与 `SyncEngine.course_local_dir` 完全一致；此前含非法字符的课程名会让「打开文件夹」指向不存在的路径。
+- **Android 权限与 FileProvider 收窄**（原 P2）：移除未使用的 `READ/WRITE_EXTERNAL_STORAGE`（应用只写自己的专属目录并经 FileProvider 分享）、`WAKE_LOCK`/`RECEIVE_BOOT_COMPLETED`/`FOREGROUND_SERVICE*`（由 androidx.work 的库清单声明，应用自身不需要），删除 `usesCleartextTraffic="true"`（全部接口为 HTTPS）；`res/xml/file_paths.xml` 从 `<external-path path="." />`（整块外部存储）收窄为 `<external-files-path path="elearning/" />` + 应用私有 files/cache。
+- 新增根目录 `CHANGELOG.md`（原 P2「建立 CHANGELOG」），记录 v1.0.5 起各版本的用户可见变化；发布说明仍以 GitHub Release 为准。
+
 ## 2. 信息优先级
 
 发生冲突时按以下优先级判断：
@@ -1314,14 +1321,14 @@ UI 改动完成后必须实际运行并截图检查关键尺寸；仅阅读代�
 
 ### P2：一致性和维护性
 
-- Android README 已在 `v1.0.5` 修正版本、SQLite 和后台同步描述；仍须在内置预览完成后更新预览说明。
+- ~~Android README 已在 `v1.0.5` 修正版本、SQLite 和后台同步描述；仍须在内置预览完成后更新预览说明。~~ —— 预览、同步、安全说明已在 v1.0.10～v1.0.12 补齐。
 - 根 README 的 Releases 链接已在 `v1.0.5` 对齐实际 `origin`。
 - 修正文档中“HTML 完全离线”的表述，或真正下载依赖资源。
-- 页面归档改为稳定覆盖/版本化，避免每轮产生 `(1)/(2)` 重复文件。
+- ~~页面归档改为稳定覆盖/版本化，避免每轮产生 `(1)/(2)` 重复文件。~~ —— `v1.0.12` 已完成（稳定命名 + 原子覆盖 + 清理历史副本）。
 - 记录可复现的桌面发布依赖锁定清单；不要用整套本机 conda 环境充当锁文件。
-- 收窄 Android FileProvider、清理无用权限和未实现的 Service/Receiver 声明。
+- ~~收窄 Android FileProvider、清理无用权限和未实现的 Service/Receiver 声明。~~ —— `v1.0.12` 已完成权限与 FileProvider 收窄（Service/Receiver 声明本就不存在）。
 - 为认证、数据库、下载、Worker 和预览补充 Android 单元/集成测试。
-- 建立 CI、开发依赖清单和 CHANGELOG；当前仓库没有 GitHub Actions、依赖锁或统一 pytest 配置。
+- ~~建立 CHANGELOG~~ —— `v1.0.12` 已新增根目录 `CHANGELOG.md`。仍缺：CI（GitHub Actions）、可复现的依赖锁定清单、统一 pytest 配置。
 
 修复缺口时一次只解决清晰范围，先加测试再改行为，避免同时重写两端架构。
 

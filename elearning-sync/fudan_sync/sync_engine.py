@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html as html_lib
+import hashlib
 import os
 import re
 from dataclasses import dataclass, field
@@ -460,24 +461,51 @@ class SyncEngine:
 
     # ------------------------------------------------------------------
     def _archive_pages(self, course_dir: str, pages) -> int:
-        """把页面/作业/公告正文导出为 HTML，本地化非文件类内容。"""
+        """
+        把页面/作业/公告正文导出为 HTML，本地化非文件类内容。
+
+        稳定命名（v1.0.12 起）：同一页面在同一课程目录下**始终写同一个文件名**，
+        正文没变就不重写，正文变了原地原子覆盖；同一轮里不同页面重名才追加 `(n)`。
+        旧实现每轮都走 `unique_path`，同步几次就会攒出
+        「页面 - 标题 (1).html」「页面 - 标题 (2).html」等一堆副本。
+        同时在写入时清理**同名编号副本**（只删与当前页面同一组名字的历史副本，
+        不动用户自己的文件）。
+        """
         out_dir = os.path.join(course_dir, _PAGES_SUBDIR)
         os.makedirs(out_dir, exist_ok=True)
         count = 0
+        used_names: set = set()
         for page in pages:
             try:
                 title = sanitize_path_component(page.title or "untitled") or "untitled"
                 kind_tag = {"page": "页面", "assignment": "作业",
                             "announcement": "公告", "syllabus": "大纲"}.get(page.kind,
                                                                             page.kind)
-                filename = f"{kind_tag} - {title}.html"
-                dest = unique_path(os.path.join(out_dir, filename))
+                # 同一轮内重名（不同页面）才避让；跨轮固定使用第一个名字
+                index = 0
+                while True:
+                    suffix = "" if index == 0 else f" ({index})"
+                    filename = f"{kind_tag} - {title}{suffix}.html"
+                    if filename.casefold() not in used_names:
+                        break
+                    index += 1
+                used_names.add(filename.casefold())
+                dest = os.path.join(out_dir, filename)
+                if index == 0:
+                    self._remove_stale_page_copies(out_dir, kind_tag, title)
                 body = self._rewrite_links(page.body or "", page)
+                marker = "<!-- fxx-body-sha1:%s -->" % hashlib.sha1(
+                    body.encode("utf-8")).hexdigest()
+                existing = self._read_text(dest)
+                if existing is not None and marker in existing:
+                    count += 1  # 内容没变：不重写，保留首次归档时间
+                    continue
                 document = (
                     "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n"
                     "<meta charset=\"utf-8\">\n"
                     f"<title>{html_lib.escape(title)}</title>\n"
                     "<meta name=\"generator\" content=\"FuXiaoXue\">\n"
+                    f"{marker}\n"
                     "<style>body{font-family:sans-serif;max-width:900px;"
                     "margin:2em auto;padding:0 1em;line-height:1.6}"
                     "img{max-width:100%}table{border-collapse:collapse}"
@@ -487,12 +515,38 @@ class SyncEngine:
                     f"<p><small>类型：{kind_tag} | 归档时间：{now_utc()}</small></p>\n"
                     f"{body}\n</body>\n</html>\n"
                 )
-                with open(dest, "w", encoding="utf-8") as handle:
-                    handle.write(document)
+                self._write_atomic(dest, document)
                 count += 1
             except OSError as exc:
                 self._log("warning", "归档页面失败 [%s]: %s", page.title, exc)
         return count
+
+    @staticmethod
+    def _read_text(path: str):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return handle.read()
+        except OSError:
+            return None
+
+    @staticmethod
+    def _write_atomic(path: str, text: str) -> None:
+        """临时文件 + os.replace，避免中途失败留下半截 HTML。"""
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp, path)
+
+    def _remove_stale_page_copies(self, out_dir: str, kind_tag: str, title: str) -> None:
+        """删除旧版本留下的「同名 (n)」副本（只针对这一组名字）。"""
+        for stale in range(1, 50):
+            stale_path = os.path.join(out_dir, f"{kind_tag} - {title} ({stale}).html")
+            if os.path.exists(stale_path):
+                try:
+                    os.remove(stale_path)
+                    self._log("info", "清理历史页面副本: %s", os.path.basename(stale_path))
+                except OSError:  # pragma: no cover - 权限异常时忽略
+                    pass
 
     def _rewrite_links(self, body: str, page) -> str:
         """把相对资源链接改为绝对路径，避免本地 HTML 无法加载资源。"""

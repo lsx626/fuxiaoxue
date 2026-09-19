@@ -21,7 +21,7 @@ from .. import __version__
 from ..auth import AuthError
 from ..config import load_config
 from ..state import StateStore
-from ..utils import format_size
+from ..utils import format_size, sanitize_path_component
 from .config_io import load_gui_state, save_gui_state
 from .icon import app_icon
 from .login_window import LoginWindow
@@ -938,6 +938,11 @@ class MainWindow(QMainWindow):
         webbrowser.open(f"file:///{self.cfg.root_dir.replace(os.sep, '/')}")
 
     def _course_local_dir(self, course_id: int) -> Optional[str]:
+        """
+        课程本地目录：**必须复用同步引擎的命名规则**（`sanitize_path_component`
+        清洗课程名与课程代码），否则课程名含非法字符时 GUI 算出来的路径与引擎
+        实际落盘目录不一致，"打开文件夹"会指向不存在的目录。
+        """
         try:
             state = StateStore(self.cfg.state_db)
         except Exception:  # pylint: disable=broad-except
@@ -945,9 +950,11 @@ class MainWindow(QMainWindow):
         try:
             for course in state.list_courses():
                 if course.get("id") == course_id:
-                    name = course.get("name") or f"course_{course_id}"
+                    name = sanitize_path_component(
+                        course.get("name") or f"course_{course_id}")
                     code = course.get("code") or ""
-                    directory = name if not code else f"{name} [{code}]"
+                    directory = name if not code else (
+                        f"{name} [{sanitize_path_component(code)}]")
                     return os.path.join(self.cfg.root_dir, directory)
         finally:
             state.close()

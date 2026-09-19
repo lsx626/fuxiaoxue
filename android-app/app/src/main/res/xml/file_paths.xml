@@ -1,8 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <external-path name="external_files" path="." />
-    <files-path name="files" path="." />
-    <cache-path name="cache" path="." />
-    <external-files-path name="external_app_files" path="." />
-    <external-cache-path name="external_cache" path="." />
+    <!--
+      只暴露应用自己的目录，绝不暴露整块外部存储：
+      - 课程文件在 <external-files>/elearning/ 下；
+      - 预览产生的临时文件在应用私有 cache/ 与外部 cache/ 下（分享时需要）。
+      旧的 <external-path path="." /> 会把整个 /sdcard 都纳入 FileProvider，已移除。
+    -->
+    <external-files-path name="course_downloads" path="elearning/" />
+    <files-path name="app_files" path="." />
+    <cache-path name="app_cache" path="." />
+    <external-cache-path name="app_external_cache" path="." />
 </paths>
