@@ -234,15 +234,22 @@ Android Studio 里对应设置为：**Settings → Build, Execution, Deployment 
 
 **改构建/配置文件必须用补丁工具，不要用 PowerShell 字符串替换**：`Set-Content -NoNewline`（默认 ANSI 编码）会把 `build.gradle.kts` 里的中文注释写坏，表现为 `Unexpected symbol`（`v1.0.11` 开发中真实踩过，整个仓库一度不可构建）。同类文件还有 `settings.gradle.kts`、`gradle.properties`、`.iss`、`.spec`。若要改版本号，用 `apply_patch` 精确改动对应行。**源码也一样**：v1.1.1 开发中用 `Get-Content -Raw` + `.Replace()` + `[IO.File]::WriteAllText` 改 `SyncEngine.kt`，结果未匹配的 `onProgress` 调用里的 `"` 全部变成 `c`（`"course"` → `ccoursec`），只有 `git checkout` + 重做才救回来。**规则：任何含中文/引号的源码文件一律用编辑工具改，不要用 PowerShell 读全文再字符串替换**；哪怕编码对了，转义与匹配的失败方式不可控。
 
-**本机 git 配了本地代理，代理挂掉时推送与 Release API 都会失败**：`git config --global http.proxy` 指向 `http://127.0.0.1:7892`，该代理不可用时表现为 `TLS connect error: SSL routines::unexpected eof while reading`（openssl 后端）或 `schannel: failed to receive handshake`，而 `curl https://github.com/.../info/refs?service=git-upload-pack` 却是 200——据此可快速判断是代理而不是仓库/凭据问题。绕过方式（本机实测可用）：
+**本机网络的两种失效模式与判别（v1.2.0 发布实测）**：
+
+1. **代理 `http://127.0.0.1:7892` 不可用**（历史教训）：`git push` 报 `TLS connect error: SSL routines::unexpected eof while reading` 或 `schannel: failed to receive handshake`。判别：`curl -x http://127.0.0.1:7892 -o NUL -w '%{http_code}' https://api.github.com/repos/lsx626/fuxiaoxue` 不是 200 即代理挂了。
+2. **DNS 被污染（v1.2.0 实测为当前常态）**：`Resolve-DnsName github.com` 返回 `205.164.50.202`（假 IP）；此时**清空代理直连必败**（openssl 报「no alternative certificate subject name matches target hostname 'github.com'」，schannel 报 `SEC_E_WRONG_PRINCIPAL`，连 `curl --noproxy '*'` 也失败），而 `api.github.com` 解析为真实 IP（20.205.243.168）。**此时正确的做法恰恰相反：经代理走**——代理活着时 `git push`（默认 `http.proxy` 配置 + 凭据管理器 `credential.helper=manager`）直接成功；Release API 用 `curl -x http://127.0.0.1:7892` 调用。**不要**在 DNS 污染环境下按下面的旧脚本清空代理。
+
+两者共同结论：推送或 Release API 失败时，先用上面那条 curl 经代理探活，再决定是「代理挂了」还是「DNS 污染需要走代理」。
+
+**无 `gh` CLI 时的 Release 流程（v1.2.0 实测）**：令牌在本机根目录 `.gh-token`（已被 `.gitignore` 排除）。GitHub API 的 JSON 体**必须无 BOM**（`Set-Content -Encoding UTF8` 带 BOM 会被 API 拒收 `Problems parsing JSON`），且 PowerShell 传内联 JSON 给 curl 时引号会被吃掉——正确做法是把体写入临时文件再用 `--data-binary "@file.json"`，JSON 体本身用 Python 的 `json.dumps` 生成最可靠：
 
 ```powershell
-# 推送：显式清空代理
-git -c http.proxy= -c http.sslBackend=openssl push https://<token>@github.com/lsx626/fuxiaoxue.git HEAD:refs/heads/main
-# Release：PowerShell 的 Invoke-RestMethod 会走系统代理而失败，改用 curl
-curl.exe -sS -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/json" `
-  --data-binary "@release.json" https://api.github.com/repos/lsx626/fuxiaoxue/releases
-curl.exe -sS -X POST -H "Authorization: Bearer <token>" -H "Content-Type: application/octet-stream" `
+$proxy = 'http://127.0.0.1:7892'
+$token = (Get-Content '.gh-token' | Select-Object -First 1).Trim()
+# 创建草稿 → 上传附件 → 校验 digest → PATCH {"draft":false} 公开
+curl.exe -sS -x $proxy -X POST -H "Authorization: Bearer $token" -H 'Content-Type: application/json; charset=utf-8' `
+  --data-binary "@release-body.json" 'https://api.github.com/repos/lsx626/fuxiaoxue/releases'
+curl.exe -sS -x $proxy -X POST -H "Authorization: Bearer $token" -H 'Content-Type: application/octet-stream' `
   --data-binary "@release/fuxiaoxue-vX.Y.Z.apk" `
   "https://uploads.github.com/repos/lsx626/fuxiaoxue/releases/<id>/assets?name=fuxiaoxue-vX.Y.Z.apk"
 ```
