@@ -87,11 +87,17 @@ class SyncPolicyTest {
     }
 
     @Test
-    fun skipRulesCoverInstallersAndCanvasImages() {
-        assertTrue(SyncPolicy.shouldSkip("setup.exe"))
-        assertTrue(SyncPolicy.shouldSkip("工具.APK"))
-        assertTrue(SyncPolicy.shouldSkip("course_image.png"))
+    fun skipRulesOnlyCoverCanvasSystemImages() {
+        // v1.2.2：安装包/压缩包扩展名不再被跳过——课程资料归用户所有，
+        // 旧的扩展名审查让这些文件永远不出现，用户只能看到「少文件」。
+        assertFalse(SyncPolicy.shouldSkip("setup.exe"))
+        assertFalse(SyncPolicy.shouldSkip("工具.APK"))
+        assertFalse(SyncPolicy.shouldSkip("实验材料.7z"))
+        assertFalse(SyncPolicy.shouldSkip("数据包.rar"))
+        assertFalse(SyncPolicy.shouldSkip("工具.jar"))
         assertFalse(SyncPolicy.shouldSkip("讲义.pdf"))
         assertFalse(SyncPolicy.shouldSkip("数据.xlsx"))
+        // Canvas 自己的课程封面图仍然跳过（非用户内容）
+        assertTrue(SyncPolicy.shouldSkip("course_image.png"))
     }
 }

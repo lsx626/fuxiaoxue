@@ -102,6 +102,16 @@
 
 **测试**：桌面 151 passed（新增 2 项：`test_office_result_for_previous_sibling_is_discarded`、`test_decode_text_bytes_handles_bom_encodings_and_gb18030`）；Android JVM 109 passed + `lintDebug` 通过；插桩 38 OK（`-gpu guest` 无头模拟器通道——`swiftshader_indirect` 无头渲染会挂死，见 §17）。
 
+`v1.2.2`（2026-09-30 发布；桌面 VERSION/`__init__.py`/setup.iss = 1.2.2，Android versionCode 18/versionName 1.2.2；「忠实同步与失败可见性」，全部为同步/界面层，数据语义不变）：
+
+- **根因（用户报告「压缩包、py 等特殊格式稳定不能下载，部分 word 也是」）**：① Android `SyncPolicy.INSTALLER_EXTENSIONS` 按**扩展名静默跳过** `7z/rar/tar/jar/img/bin/iso/exe/msi/dmg/pkg/apk/deb/rpm/dll/sys/cmd/bat/com/scr`——这些都是课程资料，旧实现让它们**永远不出现**在文件列表里；② 教师**锁定**文件（答案类 `.py`、答案压缩包、答案 docx 最常被锁）在 Android 完全不采集锁定状态，下载时 Canvas 返回 403 被误报成「登录状态已失效」并标为不可重试的失败；③ 失败原因从未落库/展示——`files.error` 列存在但 `FileItem` 没映射、`markFailed` 不写原因，用户只看到「下载失败」三个字。
+- **Android 修复**：`shouldSkip` 只保留 `course_image`（Canvas 系统封面图）这一非用户内容，**不再按扩展名审查**；`CanvasFile`/`RemoteFileRef` 采集 `locked_for_user`/`locked`，锁定文件入库为 `status='locked'` + 原因（列表可见、显示锁图标、无预览/分享/重试按钮）；`DownloadManager` 把 401 与 403 分开（401=会话失效熔断整批；403=「无权访问：该文件可能已被教师锁定」只失败本文件）；`DownloadPlan.LOGIN_MARKERS` 去掉 `"cas"`——它是 case/castle/cascade 的词干，任何开头 1 KiB 含 case 的课程 HTML 都会被误判成登录页**并永久删除**（非重试）；`FileItem` 补 `error` 字段并贯通 Repo 读写，失败/锁定原因常驻文件行；`Repo.markFailed` 写入原因、`retryFile` 重试失败时回写新原因；`FileUtils.statusText` 加 `locked → 已锁定`；`SyncEngine` 锁定文件入清单不下载、失败行带原因。
+- **桌面修复**：锁定文件从「整文件跳过」改为入库 `status='locked'`（`StateStore.mark_locked`），文件列表状态列显示「已锁定」并把 `last_error` 作为悬浮提示；`_should_skip` 不再把 `locked` 当跳过原因。下载器：401 立即熔断（`_auth_failed`，其余排队文件直接跳过而非各跑 5 次重试）；403 不重试并写明「可能已被教师锁定」；下载到登录页正文（200 + 6328 字节 HTML）立即熔断不再重试 5 次。
+- **桌面 DB 实证（`%APPDATA%\fudan-elearning-sync\sync_state.db`）**：24 个文件 23 个失败，`last_error` 全是 `HTTPError: 416` 或 `大小不匹配: 期望 X 实际 6328`（6328 = Canvas 登录页固定字节数，`curl -L https://elearning.fudan.edu.cn/login` 实测一致）——即会话过期时下载请求拿到登录页，旧代码把它当普通网络错误反复重试后永久失败。新版本的熔断 + 明确文案让用户知道「该重新登录了」。该库是 2026-09-17 旧版本 App 的残留（v1.0.5 前的下载器还没有登录页嗅探），**查此类问题的第一动作是读 `files.last_error` 聚合**（注意脱敏：不输出 URL/路径）。
+- **保留行为**：桌面 `exclude_installer_files`（默认开，仅 exe/msi/apk 等真正的安装包，且设置页可关）不变——它的名单不含压缩包，与 Android 旧的黑名单不是一回事；两端 `course_image` 目录跳过不变。
+
+**测试**：桌面 155 passed（新增 4 项：403 不重试且点名锁定、401 熔断跳过排队文件、登录页正文一次即熔断、`mark_locked` 落库可见）；Android JVM 109 passed（改 2 项断言：扩展名不再跳过、含 case 的课程 HTML 不是登录页）+ `lintDebug` 通过。
+
 ## 2. 信息优先级
 
 发生冲突时按以下优先级判断：

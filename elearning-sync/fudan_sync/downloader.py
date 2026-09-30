@@ -94,11 +94,17 @@ class Downloader:
         self.log = logger
         self.progress_callback = progress_callback
         self._stop = threading.Event()
+        # v1.2.2：一旦发现会话过期就熔断，其余文件不再白跑重试
+        self._auth_failed = threading.Event()
         self._total_bytes = 0
         self._lock = threading.Lock()
 
     def stop(self) -> None:
         self._stop.set()
+
+    def halt_for_auth(self) -> None:
+        """会话已确认过期：通知所有在途/排队任务直接放弃（v1.2.2）。"""
+        self._auth_failed.set()
 
     def is_stopped(self) -> bool:
         """供引擎在长流程中协作检查（不再让调用方读 `_stop` 私有字段）。"""
@@ -135,6 +141,10 @@ class Downloader:
         tmp = f"{dest}.part"
         attempt = 0
         while attempt < self.max_retries and not self._stop.is_set():
+            # v1.2.2：别的文件已经确认会话过期——本文件不必再重试
+            if self._auth_failed.is_set():
+                result.error = "Canvas 会话已过期，已跳过（请重新登录后同步）"
+                return result
             attempt += 1
             try:
                 download_url = self._resolve_download_url(task)
@@ -185,6 +195,22 @@ class Downloader:
                     # 服务器忽略了 Range 请求 -> 重新完整写入
                     if offset > 0 and resp.status_code == 200:
                         offset, mode = 0, "wb"
+                    # v1.2.2：401/403 与会话或权限有关，重试纯属浪费——
+                    # 401 是会话过期（熔断，其余文件直接跳过）；
+                    # 403 最常见于教师锁定文件（答案类 .py / 压缩包 / 答案文档）。
+                    if resp.status_code in (401, 403):
+                        try:
+                            resp.close()
+                        except Exception:  # pylint: disable=broad-except
+                            pass
+                        if os.path.exists(tmp):
+                            os.remove(tmp)
+                        if resp.status_code == 401:
+                            self._auth_failed.set()
+                            result.error = "Canvas 会话已过期（HTTP 401），请重新登录后同步"
+                        else:
+                            result.error = "无权访问（HTTP 403）：该文件可能已被教师锁定"
+                        return result
                     resp.raise_for_status()
 
                     content_length = resp.headers.get("Content-Length")
@@ -223,10 +249,9 @@ class Downloader:
             # 上一轮残留的 .part 续传也会让真实内容前面拼上一段登录页。
             if not _is_html_target(task) and _looks_like_auth_page(tmp):
                 os.remove(tmp)
-                result.error = "下载到的是登录页而非文件内容（会话可能已过期）"
-                if attempt < self.max_retries and not self._stop.is_set():
-                    time.sleep(min(2 ** attempt, 20))
-                    continue
+                # v1.2.2：确认会话过期 → 熔断，其余排队文件不再逐个重试 5 次
+                self._auth_failed.set()
+                result.error = "Canvas 会话已过期，请重新登录后同步"
                 return result
 
             # 完整性校验：大小须匹配（未知时放行）

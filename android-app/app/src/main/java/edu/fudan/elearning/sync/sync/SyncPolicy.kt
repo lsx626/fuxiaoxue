@@ -14,12 +14,6 @@ import java.util.Locale
  */
 object SyncPolicy {
 
-    /** 安装包/可执行文件等「驳杂」扩展名。 */
-    private val INSTALLER_EXTENSIONS = setOf(
-        "exe", "msi", "dmg", "pkg", "apk", "deb", "rpm", "jar", "iso", "img",
-        "bin", "dll", "sys", "cmd", "bat", "com", "scr", "7z", "rar", "tar"
-    )
-
     /** 是否需要下载该文件。 */
     fun shouldDownload(
         full: Boolean,
@@ -50,11 +44,18 @@ object SyncPolicy {
             .map { it.fileId }
     }
 
-    /** 是否跳过「驳杂」文件（安装包、可执行文件、Canvas 系统封面图）。 */
+    /**
+     * v1.2.2 起**不再**按扩展名静默跳过「安装包/压缩包」类文件。
+     *
+     * 课程资料归用户所有：老师的 `实验材料.7z`、`数据包.rar`、`工具.jar` 与
+     * 普通文档没有本质区别，旧实现按扩展名审查（7z/rar/tar/jar/img/bin/iso…）
+     * 让这些文件**永远不出现**在文件列表里，用户只能看到「同步完了但少文件」。
+     * 现在忠实下载一切用户有权访问的文件；不需要的文件用户自行删除即可。
+     * 保留的 `course_image` 目录跳过针对 Canvas 自己的课程封面图，不是用户内容。
+     */
+    /** 是否跳过 Canvas 系统封面图等非用户内容。 */
     fun shouldSkip(remoteName: String): Boolean {
         val lower = remoteName.lowercase(Locale.ROOT)
-        val ext = lower.substringAfterLast('.', "")
-        if (ext in INSTALLER_EXTENSIONS) return true
         if (lower.contains("course_image")) return true
         return false
     }
@@ -63,4 +64,6 @@ object SyncPolicy {
     const val STATUS_FAILED = "failed"
     const val STATUS_REMOTE_MISSING = "remote_missing"
     const val STATUS_PENDING = "pending"
+    /** 教师已锁定：文件可见（在列表里标注），但 Canvas 不允许下载。 */
+    const val STATUS_LOCKED = "locked"
 }

@@ -273,8 +273,16 @@ class SyncEngine(
         }
 
         val tasks = mutableListOf<DownloadTask>()
+        val lockedRefs = mutableListOf<RemoteFileRef>()
         for (ref in files) {
             if (SyncPolicy.shouldSkip(remoteName(ref))) continue
+
+            // v1.2.2：教师锁定的文件照样入库（列表可见、标注原因），但不下载——
+            // 旧实现会把 403 当成「登录失效」反复失败，用户却不知道为什么。
+            if (ref.locked) {
+                lockedRefs += ref
+                continue
+            }
 
             val existing = existingRecords.firstOrNull { it.fileId == ref.fileId }
             val localPath = existing?.localPath.orEmpty()
@@ -367,7 +375,7 @@ class SyncEngine(
                     }
                     is DownloadOutcome.Failed -> {
                         stats.filesFailed += 1
-                        // 记录失败行，让列表能显示、下次同步能重试
+                        // 记录失败行 + 原因，让列表能显示「为什么失败」（v1.2.2）
                         repo.upsertFile(
                             FileItem(
                                 fileId = task.ref.fileId,
@@ -380,7 +388,8 @@ class SyncEngine(
                                 status = SyncPolicy.STATUS_FAILED,
                                 downloadedAt = task.previousDownloadedAt,
                                 url = task.ref.url,
-                                updatedAt = task.ref.updatedAt
+                                updatedAt = task.ref.updatedAt,
+                                error = download.reason
                             )
                         )
                         onProgress(
@@ -394,6 +403,26 @@ class SyncEngine(
                     }
                 }
             }
+        }
+
+        // v1.2.2：教师锁定的文件入清单（可见、标注原因），不参与下载
+        for (ref in lockedRefs) {
+            repo.upsertFile(
+                FileItem(
+                    fileId = ref.fileId,
+                    courseId = canvasCourse.id,
+                    name = ref.displayName,
+                    filename = ref.filename,
+                    folderPath = ref.folderPath,
+                    localPath = "",
+                    size = ref.size,
+                    status = SyncPolicy.STATUS_LOCKED,
+                    downloadedAt = null,
+                    url = ref.url,
+                    updatedAt = ref.updatedAt,
+                    error = "教师已锁定，暂不开放下载"
+                )
+            )
         }
 
         // 删除安全闸门：列表完整成功才允许判定远端删除，且只改状态不删本地文件

@@ -908,6 +908,10 @@ class MainWindow(QMainWindow):
             status_item = QTableWidgetItem(status_text)
             status_item.setTextAlignment(Qt.AlignCenter)
             status_item.setForeground(QColor(status_color))
+            # v1.2.2：失败/锁定时把原因放进 tooltip——用户不用翻日志就能知道为什么
+            failure_reason = (file_info.get("last_error") or "").strip()
+            if status in ("failed", "locked") and failure_reason:
+                status_item.setToolTip(failure_reason)
             self.file_table.setItem(row, 2, status_item)
 
             # 阅读进度
@@ -967,6 +971,8 @@ class MainWindow(QMainWindow):
             "pending": ("待下载", WARNING),
             "failed": ("下载失败", DANGER),
             "remote_missing": ("远端已删", TEXT_SECONDARY),
+            # v1.2.2：教师锁定的文件——可见，但下载被 Canvas 拒绝
+            "locked": ("已锁定", TEXT_SECONDARY),
         }
         return mapping.get(status, (status, TEXT_SECONDARY))
 

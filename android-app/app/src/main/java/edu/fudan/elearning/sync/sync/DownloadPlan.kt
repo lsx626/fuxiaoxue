@@ -123,7 +123,10 @@ object DownloadPlan {
     }
 
     private val LOGIN_MARKERS = listOf(
-        "登录", "sign in", "log in", "login", "idp/", "authn", "authcenter", "cas"
+        "登录", "sign in", "log in", "login", "idp/", "authn", "authcenter"
+        // v1.2.2：移除 "cas"——它是常见英文词干（case/castle/cascade），
+        // 任何开头 1 KiB 含 case 的 HTML/课程文件都会被误判成登录页并永久删除。
+        // 登录页本身必带 idp/authn/authcenter/登录 之一，判据足够。
     )
 
     const val PART_SUFFIX = ".part"

@@ -18,11 +18,13 @@ data class FileItem(
     val folderPath: String = "",
     val localPath: String = "",
     val size: Long = 0,
-    val status: String = "pending", // pending / downloaded / failed / remote_missing
+    val status: String = "pending", // pending / downloaded / failed / remote_missing / locked
     val downloadedAt: String? = null,
     val url: String = "",
     /** 远端 `updated_at`；增量同步据此判断「同大小但内容已更新」。 */
-    val updatedAt: String = ""
+    val updatedAt: String = "",
+    /** 失败原因（或锁定说明）；界面直接展示给用户排障（v1.2.2）。 */
+    val error: String = ""
 )
 
 /** 同步运行记录 */

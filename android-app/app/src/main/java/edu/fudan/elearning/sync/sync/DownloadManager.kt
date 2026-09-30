@@ -114,8 +114,14 @@ class DownloadManager(
                     part.delete()
                     return DownloadOutcome.Failed("断点已失效，将重新下载", retryable = true)
                 }
-                resp.code == 401 || resp.code == 403 ->
+                resp.code == 401 ->
                     return DownloadOutcome.Failed("登录状态已失效，请重新登录", retryable = false)
+                resp.code == 403 ->
+                    // v1.2.2：403 最常见的原因是教师锁定了文件（答案类 .py / 压缩包 /
+                    // 答案文档常被锁定），而不是登录失效——把话说准，且不因此中止其余下载。
+                    return DownloadOutcome.Failed(
+                        "无权访问：该文件可能已被教师锁定", retryable = false
+                    )
                 resp.code != 200 && resp.code != 206 ->
                     return DownloadOutcome.Failed(
                         "下载失败（HTTP ${resp.code}）",

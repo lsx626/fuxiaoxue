@@ -17,7 +17,9 @@ data class RemoteFileRef(
     val updatedAt: String,
     /** 发现来源，例如 `files`、`files+module`、`files+page`。 */
     val sources: String,
-    val context: String = ""
+    val context: String = "",
+    /** 教师已锁定：文件可见但 Canvas 不允许下载（v1.2.2）。 */
+    val locked: Boolean = false
 )
 
 /**
@@ -276,7 +278,9 @@ class CourseCrawler(
             }
             found[file.id] = existing.copy(
                 sources = mergedSource,
-                context = existing.context.ifEmpty { context }
+                context = existing.context.ifEmpty { context },
+                // 任一来源显示锁定即锁定
+                locked = existing.locked || file.isLocked
             )
             return
         }
@@ -289,7 +293,8 @@ class CourseCrawler(
             folderPath = path,
             updatedAt = file.updatedAt,
             sources = source,
-            context = context
+            context = context,
+            locked = file.isLocked
         )
     }
 

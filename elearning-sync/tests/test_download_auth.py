@@ -247,5 +247,93 @@ class AuthPageHelperTests(unittest.TestCase):
         self.assertFalse(_is_html_target(task))
 
 
+class AuthFailureCircuitBreakerTests(unittest.TestCase):
+    """v1.2.2：401/403 与登录页都不得重试 5 次，且 401/登录页要熔断其余文件。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+
+    def _make_downloader(self, session):
+        return Downloader(api_session=session, api_base="https://elearning.test",
+                          max_retries=5, logger=MagicMock())
+
+    def test_403_is_not_retried_and_names_locked_files(self):
+        calls = {"n": 0}
+
+        def factory(url, kw):
+            calls["n"] += 1
+            return FakeResponse(403, url=url)
+
+        session = FakeApiSession(factory)
+        downloader = self._make_downloader(session)
+        result = downloader._download_one(_make_task(self.tmp))
+        self.assertFalse(result.success)
+        self.assertEqual(calls["n"], 1, "403 不得重试")
+        self.assertIn("403", result.error)
+        self.assertIn("锁定", result.error, "403 的文案要点明教师锁定这一常见原因")
+
+    def test_401_halts_and_skips_queued_files(self):
+        def factory(url, kw):
+            return FakeResponse(401, url=url)
+
+        session = FakeApiSession(factory)
+        downloader = self._make_downloader(session)
+        first = downloader._download_one(_make_task(self.tmp, size=10))
+        self.assertFalse(first.success)
+        self.assertIn("会话已过期", first.error)
+
+        another = _make_task(self.tmp, size=10)
+        another.file_id = 2
+        another.filename = "b.pdf"
+        second = downloader._download_one(another)
+        self.assertFalse(second.success)
+        self.assertIn("已跳过", second.error, "熔断后排队文件应直接跳过，不再请求")
+
+    def test_login_page_body_halts_immediately(self):
+        """200 但正文是登录页（未走重定向）：旧实现重试 5 次，现在熔断。"""
+        calls = {"n": 0}
+
+        def factory(url, kw):
+            calls["n"] += 1
+            return FakeResponse(200, url=SIGNED_URL, content=AUTH_HTML,
+                                content_length=len(AUTH_HTML))
+
+        session = FakeApiSession(factory)
+        downloader = self._make_downloader(session)
+        result = downloader._download_one(_make_task(self.tmp))
+        self.assertFalse(result.success)
+        self.assertEqual(calls["n"], 1, "登录页正文出现一次即熔断，不得重试")
+        self.assertIn("会话已过期", result.error)
+        self.assertTrue(downloader._auth_failed.is_set(), "登录页正文必须熔断后续文件")
+
+
+class LockedFileStateTests(unittest.TestCase):
+    """v1.2.2：教师锁定的文件入库为 locked 状态（可见、带原因），不再整文件消失。"""
+
+    def test_mark_locked_keeps_row_with_reason(self):
+        import shutil as _shutil
+        from fudan_sync.state import StateStore
+        tmp = tempfile.mkdtemp()
+        try:
+            db = os.path.join(tmp, "state.db")
+            store = StateStore(db)
+            store.upsert_file({
+                "file_id": 101, "course_id": 7, "filename": "答案.py",
+                "display_name": "答案.py", "size": 1024, "content_type": "",
+                "folder_id": None, "folder_path": "", "created_at": "",
+                "updated_at": "", "modified_at": "", "locked_for_user": 1,
+                "hidden": 0, "source": "files", "context": "",
+                "local_path": os.path.join(tmp, "答案.py"), "extra": "",
+            })
+            store.mark_locked(101, "教师已锁定，暂不开放下载")
+            rows = store.list_files_by_course(7)
+            self.assertEqual(len(rows), 1, "锁定文件必须留在列表里")
+            self.assertEqual(rows[0]["status"], "locked")
+            self.assertIn("锁定", rows[0]["last_error"])
+            store.close()
+        finally:
+            _shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

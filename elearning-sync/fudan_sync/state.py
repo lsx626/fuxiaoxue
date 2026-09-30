@@ -280,6 +280,13 @@ class StateStore:
             cur.execute("UPDATE files SET status='failed', last_error=? WHERE file_id=?",
                         (error[:500], file_id))
 
+    def mark_locked(self, file_id: int, reason: str) -> None:
+        """v1.2.2：教师锁定的文件保持可见（连同原因），但不参与下载。"""
+        with self._write_lock_cursor() as cur:
+            cur.execute(
+                "UPDATE files SET status='locked', last_error=?, local_path=NULL WHERE file_id=?",
+                (reason[:500], file_id))
+
     @staticmethod
     def _is_safe_prune_path(path: str, prune_root: str) -> bool:
         """只允许清理指定课程目录内的文件，兼容旧库中的异常路径。"""

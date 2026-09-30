@@ -33,8 +33,14 @@ data class CanvasFile(
     val url: String = "",
     @SerializedName("folder_id") val folderId: Long = 0,
     @SerializedName("updated_at") val updatedAt: String = "",
-    @SerializedName("mime_class") val mimeClass: String = ""
-)
+    @SerializedName("mime_class") val mimeClass: String = "",
+    @SerializedName("locked_for_user") val lockedForUser: Boolean = false,
+    /** 旧字段：部分 Canvas 版本/来源（模块附件）只给 `locked`。 */
+    val locked: Boolean = false
+) {
+    /** 两个键任一为真即视为锁定。 */
+    val isLocked: Boolean get() = lockedForUser || locked
+}
 
 /**
  * Canvas REST API 客户端。

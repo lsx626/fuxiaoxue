@@ -506,7 +506,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     toast("已重新下载：${file.name}")
                 }
                 is edu.fudan.elearning.sync.sync.DownloadOutcome.Failed -> {
-                    withContext(Dispatchers.IO) { repo.markFailed(file.fileId) }
+                    // v1.2.2：把失败原因写回记录，列表行常驻显示
+                    withContext(Dispatchers.IO) {
+                        repo.markFailed(file.fileId, result.reason)
+                    }
                     toast("重试失败：${result.reason}")
                 }
             }

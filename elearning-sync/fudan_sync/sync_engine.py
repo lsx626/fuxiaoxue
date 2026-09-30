@@ -324,10 +324,7 @@ class SyncEngine:
         for remote in result.files.values():
             skip_reason = self._should_skip(remote)
             if skip_reason:
-                if skip_reason == "locked":
-                    stats.files_locked += 1
-                else:
-                    stats.files_skipped += 1
+                stats.files_skipped += 1
                 self._log("debug", "跳过文件 %s（%s）", remote.filename, skip_reason)
                 continue
 
@@ -354,6 +351,13 @@ class SyncEngine:
                 "extra": "",
             }
             state_needs_download = self.state.upsert_file(record)
+            # v1.2.2：教师锁定的文件照样入库（列表可见、原因可查），但不下载——
+            # 旧实现整文件跳过，用户连「有这个文件」都不知道。
+            if remote.locked_for_user:
+                self.state.mark_locked(remote.file_id, "教师已锁定，暂不开放下载")
+                stats.files_locked += 1
+                self._log("info", "文件 [%s] 已被教师锁定，跳过下载", remote.filename)
+                continue
             needs = full or state_needs_download
             if needs:
                 tasks.append(DownloadTask(
@@ -512,9 +516,11 @@ class SyncEngine:
 
     # ------------------------------------------------------------------
     def _should_skip(self, remote: RemoteFile) -> Optional[str]:
-        """返回跳过原因字符串，None 表示需要下载。"""
-        if remote.locked_for_user:
-            return "locked"
+        """返回跳过原因字符串，None 表示需要下载。
+
+        v1.2.2 起 `locked` 不再是跳过原因：锁定文件会入库标记为 `locked`
+        状态并显示在列表里（见下方的任务构建循环）。
+        """
         # Canvas 系统目录（课程封面图等）
         folders = [p.lower() for p in (remote.folder_path or "").split("/") if p]
         for bad in self.cfg.sync.download.exclude_folders:

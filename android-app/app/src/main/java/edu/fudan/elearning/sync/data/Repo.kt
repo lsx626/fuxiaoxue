@@ -108,6 +108,8 @@ class Repo(context: Context) {
             put("downloaded_at", file.downloadedAt)
             put("url", file.url)
             put("updated_at", file.updatedAt)
+            // v1.2.2：失败原因/锁定说明落库，供列表直接展示
+            put("error", file.error)
         }
         db.writableDatabase.insertWithOnConflict("files", null, values, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
     }
@@ -209,8 +211,12 @@ class Repo(context: Context) {
     }
 
     /** 标记单个文件下载失败（保留既有 local_path 与断点，便于下次重试）。 */
-    fun markFailed(fileId: Long) {
-        val values = ContentValues().apply { put("status", "failed") }
+    fun markFailed(fileId: Long, reason: String = "") {
+        // v1.2.2：原因一并落库，列表行直接展示给用户排障
+        val values = ContentValues().apply {
+            put("status", "failed")
+            put("error", reason.take(500))
+        }
         db.writableDatabase.update("files", values, "file_id=?", arrayOf(fileId.toString()))
     }
 
@@ -611,5 +617,6 @@ private fun Cursor.toFile(): FileItem = FileItem(
     status = getString(getColumnIndexOrThrow("status")),
     downloadedAt = getString(getColumnIndexOrThrow("downloaded_at")),
     url = getString(getColumnIndexOrThrow("url")),
-    updatedAt = runCatching { getString(getColumnIndexOrThrow("updated_at")) }.getOrDefault("") ?: ""
+    updatedAt = runCatching { getString(getColumnIndexOrThrow("updated_at")) }.getOrDefault("") ?: "",
+    error = runCatching { getString(getColumnIndexOrThrow("error")) }.getOrDefault("") ?: ""
 )

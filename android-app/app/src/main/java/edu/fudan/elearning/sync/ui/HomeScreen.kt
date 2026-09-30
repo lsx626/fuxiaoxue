@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -927,6 +928,7 @@ private fun FileRow(
                         color = when (file.status) {
                             "downloaded" -> MaterialTheme.colorScheme.primary
                             "failed" -> MaterialTheme.colorScheme.error
+                            "locked" -> MaterialTheme.colorScheme.tertiary
                             else -> MaterialTheme.colorScheme.onSurfaceVariant
                         }
                     )
@@ -940,12 +942,21 @@ private fun FileRow(
                         )
                     }
                 }
-                if (file.status == "failed") {
+                // v1.2.2：失败与锁定都要把原因直接写在行上——不然用户只能看到
+                // 「下载失败」三个字，既不知道为什么也不能决定怎么办。
+                if (file.status == "failed" || file.status == "locked") {
+                    val reason = file.error.ifEmpty {
+                        if (file.status == "locked") "教师已锁定，暂不开放下载" else "重试或下次同步会自动再试"
+                    }
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        stringResource(R.string.file_retry_hint),
+                        reason,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        color = if (file.status == "failed")
+                            MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -957,6 +968,12 @@ private fun FileRow(
                     TextButton(onClick = { viewModel.retryFile(file) }) {
                         Text("重试")
                     }
+                file.status == "locked" -> Icon(
+                    Icons.Filled.Lock,
+                    contentDescription = "已锁定：${file.name}",
+                    modifier = Modifier.size(16.dp).padding(horizontal = 8.dp),
+                    tint = MaterialTheme.colorScheme.tertiary
+                )
                 // remote_missing 的文件已在查询层隐藏，不会走到这里
                 else -> Text(
                     stringResource(R.string.file_pending),
@@ -965,13 +982,16 @@ private fun FileRow(
                     modifier = Modifier.padding(horizontal = 8.dp)
                 )
             }
-            IconButton(onClick = { viewModel.shareFile(file) }) {
-                Icon(
-                    Icons.Filled.Share,
-                    contentDescription = "分享 ${file.name}",
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            // 锁定文件没有本地副本，不能分享；其余状态照常
+            if (file.status != "locked") {
+                IconButton(onClick = { viewModel.shareFile(file) }) {
+                    Icon(
+                        Icons.Filled.Share,
+                        contentDescription = "分享 ${file.name}",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }

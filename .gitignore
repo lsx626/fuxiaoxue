@@ -43,6 +43,10 @@ android-app/.idea/
 *.cookie.json
 cookies.json
 sync_state.db
+# SQLite WAL 侧车文件：任何脚本/测试打开过库就会生成，禁止入库
+sync_state.db-wal
+sync_state.db-shm
+*=ro
 config.yaml
 elearning_files/
 .DS_Store

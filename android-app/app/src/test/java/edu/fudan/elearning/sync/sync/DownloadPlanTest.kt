@@ -120,6 +120,10 @@ class DownloadPlanTest {
         val courseHtml = "<!DOCTYPE html><html><body><h1>第三讲 课件</h1><p>正文</p></body></html>"
         assertFalse(DownloadPlan.looksLikeLoginPage("text/html", courseHtml))
         assertFalse(DownloadPlan.looksLikeLoginPage("text/html", ""))
+        // v1.2.2：「cas」是常见英文词干（case/castle），含它的课程 HTML 不能被
+        // 误判成登录页（真实登录页必带 idp/authn/登录 等标记）
+        val caseHtml = "<!DOCTYPE html><html><body><p>Case study: 见附件</p></body></html>"
+        assertFalse(DownloadPlan.looksLikeLoginPage("text/html", caseHtml))
     }
 
     @Test

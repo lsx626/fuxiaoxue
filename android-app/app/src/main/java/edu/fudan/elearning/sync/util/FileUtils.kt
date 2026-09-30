@@ -78,6 +78,7 @@ object FileUtils {
         "skipped" -> "已跳过"
         "remote_missing" -> "远端已删除"
         "failed" -> "下载失败"
+        "locked" -> "已锁定"
         else -> status
     }
 
