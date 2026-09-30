@@ -212,7 +212,7 @@ cd android-app; .\gradlew.bat --offline --console=plain :app:assembleDebug
 
 Android Studio 里对应设置为：**Settings → Build, Execution, Deployment → Build Tools → Gradle → Gradle JDK → 选择 JDK 21**（`Download JDK…` 也可；**不要**继续用 Android Studio 自带 JBR，否则同样报 25.0.3）。长期方案是把 Android Studio 的 Gradle JDK 固定到 21，或在升级 Gradle/AGP 到支持 JDK 25 的版本后移除该约束。
 
-**JDK 21 的获取（2026-09-30 实证）**：本机 `D:\Program Files\Android\Android Studio\jbr` 只有 JBR 25（不可用），临时目录的 Temurin 21 已被清理。直连可达的有效下载源是 **Microsoft OpenJDK**：`https://aka.ms/download-jdk/microsoft-jdk-21-windows-x64.zip`（~192 MiB，zip，解压即用，`Invoke-WebRequest` 直连 OK）。同日 **Adoptium 的二进制端点**（`api.adoptium.net/v3/binary/...`，会 302 到 GitHub CDN）在本机 TLS 握手失败（`SEC_E_WRONG_PRINCIPAL` / 「未能为 SSL/TLS 安全通道建立信任关系」），下载时注意换源。下载后 `JAVA_HOME` 指向解压目录即可跑 `gradlew.bat`。
+**JDK 21 的获取（2026-09-30 实证）**：本机 `D:\Program Files\Android\Android Studio\jbr` 只有 JBR 25（不可用）；`%TEMP%\jdk21\jdk-21.0.12.1+1` 下有一份可用的 Temurin 21（TEMP 目录可能被清理，缺失时按下面的方法重新下载）。直连可达的有效下载源是 **Microsoft OpenJDK**：`https://aka.ms/download-jdk/microsoft-jdk-21-windows-x64.zip`（~192 MiB，zip，解压即用，`Invoke-WebRequest` 直连 OK）。同日 **Adoptium 的二进制端点**（`api.adoptium.net/v3/binary/...`，会 302 到 GitHub CDN）在本机 TLS 握手失败（`SEC_E_WRONG_PRINCIPAL` / 「未能为 SSL/TLS 安全通道建立信任关系」），下载时注意换源。下载后 `JAVA_HOME` 指向解压目录即可跑 `gradlew.bat`。
 
 **改构建/配置文件必须用补丁工具，不要用 PowerShell 字符串替换**：`Set-Content -NoNewline`（默认 ANSI 编码）会把 `build.gradle.kts` 里的中文注释写坏，表现为 `Unexpected symbol`（`v1.0.11` 开发中真实踩过，整个仓库一度不可构建）。同类文件还有 `settings.gradle.kts`、`gradle.properties`、`.iss`、`.spec`。若要改版本号，用 `apply_patch` 精确改动对应行。
 
@@ -850,6 +850,18 @@ cd elearning-sync
 - Android `lintDebug` 通过，release APK/AAB 构建成功；无连接设备，因此本轮未运行 `connectedDebugAndroidTest`。
 - APK SHA-256：`D663289390B69E997362D76967CE10BC1A1149E165AD0634AE5821EEAD825F42`。
 - AAB SHA-256：`F95A2EB80A91FE8CE0D085F77270B3201CB2439228A7287F0F10B7F7A972FA52`。
+
+`v1.1.0` 的本机发布验收记录（2026-09-30）：
+
+- 桌面 133 passed 无跳过；发布环境导入探针通过（docx/pptx/PIL/yaml/lxml/fitz + QtMultimedia/QtPdf）。
+- 本轮修复了 `.packaging-venv` 的 pywin32 错配（`pythoncom.__file__` 不可用会让 PyInstaller 直接失败），重装后 PyInstaller 产物 517 文件、约 313.7 MiB；隔离 APPDATA 下 EXE 8 秒启动烟测存活。
+- Inno Setup 编译成功；安装器 89.9 MiB，未做 Authenticode 签名（`NotSigned`，如实记录）。
+- Windows 安装器 SHA-256：`4759E9BECF3CBFED51ED3D27DE2ED4C972141135D527E0D77293F8DC6111DF51`。
+- Android `lintDebug` 通过；JVM 98 passed + 无头模拟器插桩 32 passed（同日）；release APK/AAB 经 `apksigner`/`jarsigner` 验证为正式发布证书（SHA-256 指纹 `1dc096a7…1ef077`）。
+- APK SHA-256：`E5C3A699374ACB95342F27C78EF320699AF20EEC6586110A3CFB5F273DA0DD8C`。
+- AAB SHA-256：`4A3069637885E04EC198CD82E23784AFD280414135836C32B8DFA5751F842F3A`。
+- 本轮未在干净 Windows 虚拟机做全新安装/覆盖升级验收（仅构建产物完整性 + EXE 启动烟测），发布说明中已如实标注；CI 工作流在远端 push 后首次运行。
+- GitHub 发布令牌走 Windows 凭据管理器（`git credential fill`），API 调用用 `curl`（PowerShell 的 IRM 走系统代理会失败，同 §5.4）；上传大附件时代理偶发 `Connection was reset`，按 §22.5 续传规则重试即可成功。
 
 ## 21. Android 构建和发布
 
