@@ -35,8 +35,10 @@ import java.util.zip.ZipInputStream
 @Composable
 fun OfficeFallbackScreen(file: File, displayName: String = file.name) {
     val ext = FileTypes.extOf(file.name)
-    var extracted by remember { mutableStateOf<String?>(null) }
-    var note by remember { mutableStateOf("") }
+    // v1.2.1：状态以 file 键化——预览内翻文件时旧提取文本不会滞留冒充新文件。
+    val fileKey = file.absolutePath
+    var extracted by remember(fileKey) { mutableStateOf<String?>(null) }
+    var note by remember(fileKey) { mutableStateOf("") }
 
     LaunchedEffect(file.absolutePath) {
         withContext(Dispatchers.IO) {

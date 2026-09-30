@@ -131,7 +131,12 @@ fun PreviewScreen(
                         initialPositionSec = initialMediaSec,
                         onPositionChanged = onMediaPositionChanged
                     )
-                    PreviewKind.OFFICE -> OfficePreviewScreen(file, title)
+                    PreviewKind.OFFICE -> OfficePreviewScreen(
+                        file,
+                        displayName = title,
+                        initialPage = initialPage,
+                        onPageChanged = onPageChanged
+                    )
                     PreviewKind.STRUCTURED ->
                         // v1.1.2：ODF 三格式走结构化文档视图（标题/列表/表格/图片），
                         // 其余（zip/rtf 等）仍是文本降级

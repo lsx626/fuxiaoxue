@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import codecs
 import csv
+import io
 import mimetypes
 import os
 import re
@@ -320,20 +321,31 @@ def _extract_xlsx_rows(
     try:
         from openpyxl import load_workbook  # type: ignore
 
-        workbook = load_workbook(path, read_only=True, data_only=False, keep_links=False)
+        # v1.2.1：公式单元格优先显示缓存计算值（data_only=True，与 Android 端
+        # DataFormatter 同口径）；openpyxl 等工具写出的文件没有缓存值，此时回退
+        # 显示公式文本本身，而不是空白。
+        cached = load_workbook(path, read_only=True, data_only=True, keep_links=False)
+        formulas = load_workbook(path, read_only=True, data_only=False, keep_links=False)
         try:
-            for sheet in workbook.worksheets:
+            for sheet, formula_sheet in zip(cached.worksheets, formulas.worksheets):
                 max_column = min(max(sheet.max_column or 1, 1), max_cols)
                 max_row = min(max(sheet.max_row or 1, 1), max_rows)
-                for cells in sheet.iter_rows(min_row=1, max_row=max_row, max_col=max_column):
-                    # Keep internal and trailing empty cells up to the used
-                    # range. Formula values remain formula strings because
-                    # data_only=False, while dates retain their ISO meaning.
-                    values = [_format_office_value(cell.value) for cell in cells]
+                cached_rows = sheet.iter_rows(min_row=1, max_row=max_row, max_col=max_column)
+                formula_rows = formula_sheet.iter_rows(min_row=1, max_row=max_row, max_col=max_column)
+                for cells, formula_cells in zip(cached_rows, formula_rows):
+                    values = []
+                    for cell, formula_cell in zip(cells, formula_cells):
+                        value = cell.value
+                        if value is None:
+                            fallback = formula_cell.value
+                            if isinstance(fallback, str) and fallback.startswith("="):
+                                value = fallback
+                        values.append(_format_office_value(value))
                     if any(values):
                         rows.append((sheet.title, values))
         finally:
-            workbook.close()
+            cached.close()
+            formulas.close()
         if rows:
             return rows
     except Exception:  # pylint: disable=broad-except
@@ -526,6 +538,34 @@ def _rtf_codepage(number: int) -> str:
     return codec
 
 
+def _decode_text_bytes(path: str, max_bytes: int) -> str:
+    """读取文本文件并按 BOM 嗅探编码（v1.2.1 修复）。
+
+    旧实现固定按 utf-8-sig 解：带 BOM 的 UTF-16/UTF-32 文件会显示夹带 \\x00
+    的乱码。现在优先按 BOM 判定（UTF-32 必须在 UTF-16 之前检查：其 BOM 的
+    前两字节与 UTF-16 相同）；无 BOM 时按 UTF-8 解，若出现替换字符则回退
+    GB18030（校园常见编码，与 Android 端一致），仍失败按 latin-1 兜底。
+    """
+    with open(path, "rb") as stream:
+        raw = stream.read(max_bytes)
+    for bom, encoding in (
+        (codecs.BOM_UTF8, "utf-8-sig"),
+        (codecs.BOM_UTF32_LE, "utf-32"),
+        (codecs.BOM_UTF32_BE, "utf-32"),
+        (codecs.BOM_UTF16_LE, "utf-16"),
+        (codecs.BOM_UTF16_BE, "utf-16"),
+    ):
+        if raw.startswith(bom):
+            return raw.decode(encoding, errors="replace")
+    text = raw.decode("utf-8", errors="replace")
+    if "\ufffd" in text:
+        try:
+            return raw.decode("gb18030", errors="replace")
+        except (UnicodeDecodeError, LookupError):
+            return text
+    return text
+
+
 def _decode_rtf_text(content: str) -> str:
     """Decode the visible text in an RTF stream without requiring Word.
 
@@ -690,7 +730,9 @@ def _decode_rtf_text(content: str) -> str:
 class _OfficeRenderSignals(QObject):
     """Marshal a native Office conversion result back to the GUI thread."""
 
-    finished = Signal(str, str)
+    # (output_path, output_dir, source_path)：source 让 GUI 能识别并丢弃
+    # 「翻文件之后才到达」的旧文件转换结果（v1.2.1 回归修复）。
+    finished = Signal(str, str, str)
 
 
 class _ImagePreviewWidget(QWidget):
@@ -765,6 +807,17 @@ class DocumentPreviewDialog(QDialog):
         # 功能，预览本身不受影响。
         self._course_id = course_id
         self._state_db = state_db
+        # v1.2.1：对话框持有长生命周期的进度库连接——此前每翻一页/每 2 秒
+        # 都新建 StateStore（跑完整建表脚本并获取与同步线程共用的类级写锁），
+        # 既卡 UI 又与同步互相阻塞。
+        self._progress_store_obj = None
+        # v1.2.1：快速翻页时合并写库（500ms 防抖），与 Android 端口径一致。
+        self._progress_save_timer = QTimer(self)
+        self._progress_save_timer.setSingleShot(True)
+        self._progress_save_timer.setInterval(500)
+        self._progress_save_timer.timeout.connect(
+            lambda: self._save_progress(force=True)
+        )
         self._file_id: Optional[int] = None
         self._sibling_paths: List[str] = []
         self._last_saved_position = -1
@@ -772,6 +825,8 @@ class DocumentPreviewDialog(QDialog):
         self._pdf_fallback_scroll: Optional[QScrollArea] = None
         self._pdf_fallback_pages: List[tuple] = []
         self._last_media_save_ms = 0
+        # v1.2.1：媒体续读的待 seek 位置（LoadedMedia 后应用）
+        self._pending_media_seek_ms = 0
         self._temp_pdf_path: Optional[str] = None
         self._temp_pdf_dir: Optional[str] = None
         self._pdf_document = None
@@ -929,6 +984,15 @@ class DocumentPreviewDialog(QDialog):
         self._restore_progress()
 
     # -- 阅读进度与文件切换（v1.1.2） ---------------------------------
+    def _progress_store(self):
+        """长生命周期的进度库连接（GUI 线程内复用）；对话框关闭时释放。"""
+        store = self._progress_store_obj
+        if store is None:
+            from ..state import StateStore
+            store = StateStore(self._state_db)
+            self._progress_store_obj = store
+        return store
+
     def _resolve_context(self) -> None:
         """按原始路径反查 file_id 与同课程可见文件清单。"""
         self._file_id = None
@@ -937,8 +1001,7 @@ class DocumentPreviewDialog(QDialog):
             self._update_sibling_buttons()
             return
         try:
-            from ..state import StateStore
-            store = StateStore(self._state_db)
+            store = self._progress_store()
         except Exception:  # pylint: disable=broad-except
             self._update_sibling_buttons()
             return
@@ -957,11 +1020,6 @@ class DocumentPreviewDialog(QDialog):
                 ]
         except Exception:  # pylint: disable=broad-except
             pass
-        finally:
-            try:
-                store.close()
-            except Exception:  # pylint: disable=broad-except
-                pass
         self._update_sibling_buttons()
 
     def _current_position(self) -> Optional[tuple]:
@@ -1014,13 +1072,9 @@ class DocumentPreviewDialog(QDialog):
             return
         self._last_saved_position = position
         try:
-            from ..state import StateStore
-            store = StateStore(self._state_db)
-            try:
-                store.set_reading_progress(self._file_id, self._course_id or 0,
-                                           position, total, is_media)
-            finally:
-                store.close()
+            store = self._progress_store()
+            store.set_reading_progress(self._file_id, self._course_id or 0,
+                                       position, total, is_media)
         except Exception:  # pylint: disable=broad-except
             pass
 
@@ -1028,12 +1082,8 @@ class DocumentPreviewDialog(QDialog):
         if not self._file_id or not self._state_db:
             return
         try:
-            from ..state import StateStore
-            store = StateStore(self._state_db)
-            try:
-                prog = store.get_reading_progress(self._file_id)
-            finally:
-                store.close()
+            store = self._progress_store()
+            prog = store.get_reading_progress(self._file_id)
         except Exception:  # pylint: disable=broad-except
             return
         if not prog:
@@ -1045,7 +1095,15 @@ class DocumentPreviewDialog(QDialog):
             if position <= 0:
                 return
             if self.media_player is not None and is_media:
-                self.media_player.setPosition(position * 1000)
+                # v1.2.1：媒体尚未加载完成时 setPosition 会被静默丢弃——先记下
+                # 待恢复位置，等 LoadedMedia 状态到达再 seek（_on_media_status）。
+                self._pending_media_seek_ms = position * 1000
+                try:
+                    if self.media_player.mediaStatus() == self.media_player.LoadedMedia:
+                        self.media_player.setPosition(self._pending_media_seek_ms)
+                        self._pending_media_seek_ms = 0
+                except Exception:  # pylint: disable=broad-except
+                    pass
             elif self._pdf_view is not None:
                 target = min(position, max(total - 1, 0))
                 self._pdf_page = target
@@ -1093,8 +1151,26 @@ class DocumentPreviewDialog(QDialog):
         self._pdf_fallback_pages = []
         self._last_saved_position = -1
         self._last_media_save_ms = 0
+        self._pending_media_seek_ms = 0
         self._image_widget = None
         self._office_render_started = False
+        # v1.2.1：媒体对象与信号也必须随翻文件重建——_cleanup_resources 只停播清源，
+        # 旧 player 的 positionChanged 等信号仍会驱动新播放控件、污染进度与时间
+        # 显示，且旧实例会累积存活到对话框关闭。
+        stale_player = self.media_player
+        self.media_player = None
+        self.audio_output = None
+        self.video_widget = None
+        self.position_slider = None
+        self.time_label = None
+        self.loop_checkbox = None
+        if stale_player is not None:
+            try:
+                stale_player.stop()
+                stale_player.setSource(QUrl())
+            except (RuntimeError, AttributeError):
+                pass
+            stale_player.deleteLater()
         self.setWindowTitle(f"预览 · {os.path.basename(new_path)}")
         self._refresh_info_bar()
         self._resolve_context()
@@ -1160,7 +1236,8 @@ class DocumentPreviewDialog(QDialog):
 
     def _on_pdf_page_changed(self, page: int) -> None:
         self._pdf_page = max(0, int(page))
-        self._save_progress()
+        # v1.2.1：连续翻页只触发一次写库（防抖），滚动期间不再逐页建表。
+        self._progress_save_timer.start()
 
     def _load_pdf_fallback(self, path: Optional[str] = None) -> None:
         """PyMuPDF 降级：渲染全部页面（纵向连续滚动，与 Android 链路观感一致）。
@@ -1313,8 +1390,7 @@ class DocumentPreviewDialog(QDialog):
         max_bytes = 2 * 1024 * 1024
         try:
             file_size = os.path.getsize(self.file_path)
-            with open(self.file_path, "r", encoding="utf-8-sig", errors="replace") as stream:
-                content = stream.read(max_bytes)
+            content = _decode_text_bytes(self.file_path, max_bytes)
             if file_size > max_bytes:
                 content += f"\n\n… 文件过大，仅预览前 {format_size(max_bytes)} …"
         except Exception as exc:  # pylint: disable=broad-except
@@ -1333,8 +1409,7 @@ class DocumentPreviewDialog(QDialog):
     def _load_html_preview(self) -> None:
         max_bytes = 4 * 1024 * 1024
         try:
-            with open(self.file_path, "r", encoding="utf-8-sig", errors="replace") as stream:
-                content = stream.read(max_bytes)
+            content = _decode_text_bytes(self.file_path, max_bytes)
         except OSError as exc:
             self._show_error(f"读取文件失败：{exc}")
             return
@@ -1360,14 +1435,20 @@ class DocumentPreviewDialog(QDialog):
 
     def _load_csv_preview(self) -> bool:
         delimiter = "\t" if self.file_path.lower().endswith(".tsv") else ","
+        max_rows, max_cols = 1000, 40
         try:
-            with open(self.file_path, "r", encoding="utf-8-sig", errors="replace", newline="") as stream:
-                values = list(islice(csv.reader(stream, delimiter=delimiter), 1000))
+            # v1.2.1：与文本预览一致，按 BOM 嗅探编码（UTF-16 表格不再乱码）
+            text = _decode_text_bytes(self.file_path, 4 * 1024 * 1024)
+            values = list(
+                islice(csv.reader(io.StringIO(text, newline=""), delimiter=delimiter), max_rows)
+            )
         except (OSError, csv.Error):
             return False
         if not values:
             return False
-        columns = min(max(len(row) for row in values), 40)
+        truncated_rows = len(values) >= max_rows
+        truncated_cols = any(len(row) > max_cols for row in values)
+        columns = min(max(len(row) for row in values), max_cols)
         table = QTableWidget(len(values), columns)
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -1376,6 +1457,22 @@ class DocumentPreviewDialog(QDialog):
             for column, value in enumerate(values_row[:columns]):
                 table.setItem(row, column, QTableWidgetItem(value))
         table.resizeColumnsToContents()
+        # v1.2.1：超限不再静默截断——在表头 tooltip 与末行如实说明
+        if truncated_rows or truncated_cols:
+            detail = []
+            if truncated_rows:
+                detail.append(f"行数超过 {max_rows}")
+            if truncated_cols:
+                detail.append(f"列数超过 {max_cols}")
+            table.setAccessibleDescription(
+                "CSV/TSV 预览已截断：" + "、".join(detail)
+            )
+            note_row = len(values)
+            table.insertRow(note_row)
+            table.setItem(
+                note_row, 0,
+                QTableWidgetItem(f"… 已截断：{'、'.join(detail)}，仅显示前 {max_rows} 行 / 前 {max_cols} 列 …"),
+            )
         self._set_preview_widget(table)
         return True
 
@@ -1458,7 +1555,7 @@ class DocumentPreviewDialog(QDialog):
                     shutil.rmtree(output_dir, ignore_errors=True)
                 return
             try:
-                signals.finished.emit(output_path, output_dir)
+                signals.finished.emit(output_path, output_dir, source)
             except RuntimeError:
                 self._discard_office_result(output_dir)
 
@@ -1491,10 +1588,16 @@ class DocumentPreviewDialog(QDialog):
         if output_dir:
             shutil.rmtree(output_dir, ignore_errors=True)
 
-    def _on_office_rendered(self, output_path: str, output_dir: str) -> None:
+    def _on_office_rendered(self, output_path: str, output_dir: str, source: str = "") -> None:
         if not self._claim_office_result(output_dir):
             if output_dir:
                 shutil.rmtree(output_dir, ignore_errors=True)
+            return
+        # v1.2.1：翻文件后迟到的旧转换结果必须整体丢弃，否则旧 PDF 会覆盖
+        # 新文件的预览，且新文件的临时目录被孤立泄漏。
+        if source and os.path.abspath(source) != os.path.abspath(self._original_file_path):
+            if output_dir:
+                self._discard_office_result(output_dir)
             return
         if output_path and os.path.isfile(output_path):
             self._temp_pdf_path = output_path
@@ -1913,6 +2016,14 @@ class DocumentPreviewDialog(QDialog):
         }:
             self.media_message_label.clear()
             self.media_message_label.hide()
+        # v1.2.1：续读位置在媒体真正加载完成后才应用
+        if (self._pending_media_seek_ms > 0 and self.media_player is not None
+                and getattr(status, "name", "") in {"LoadedMedia", "BufferedMedia"}):
+            try:
+                self.media_player.setPosition(self._pending_media_seek_ms)
+            except Exception:  # pylint: disable=broad-except
+                pass
+            self._pending_media_seek_ms = 0
         if self.media_player is None or self.loop_checkbox is None or not self.loop_checkbox.isChecked():
             return
         if getattr(status, "name", "") == "EndOfMedia":
@@ -1988,6 +2099,18 @@ class DocumentPreviewDialog(QDialog):
             self._save_progress(force=True)
         except Exception:  # pylint: disable=broad-except
             pass
+        # v1.2.1：停掉进度防抖定时器，并关闭长生命周期的库连接
+        try:
+            self._progress_save_timer.stop()
+        except (RuntimeError, AttributeError):
+            pass
+        progress_store = self._progress_store_obj
+        self._progress_store_obj = None
+        if progress_store is not None:
+            try:
+                progress_store.close()
+            except Exception:  # pylint: disable=broad-except
+                pass
         if self.media_player is not None:
             try:
                 self.media_player.stop()

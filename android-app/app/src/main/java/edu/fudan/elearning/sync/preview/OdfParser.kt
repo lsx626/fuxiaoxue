@@ -22,13 +22,26 @@ object OdfParser {
         data class Paragraph(val text: String) : Block()
         data class ListItem(val text: String) : Block()
         data class Table(val rows: List<List<String>>) : Block()
-        data class Image(val data: ByteArray) : Block()
+        /**
+         * 内嵌图片。data 为空且 note 非空表示图片未载入（过大或总量超限），
+         * 界面显示 note 而不是假装解码失败。
+         */
+        data class Image(val data: ByteArray, val note: String = "") : Block()
     }
+
+    /** 单张内嵌图片的字节上限：超过则不载入（典型课件图片远小于此）。 */
+    private const val MAX_IMAGE_BYTES = 8L * 1024 * 1024
+
+    /** 一篇文档内嵌图片的总字节上限：全量常驻极易 OOM（v1.2.1 实测加固）。 */
+    private const val MAX_TOTAL_IMAGE_BYTES = 64L * 1024 * 1024
 
     private const val NS_OFFICE = "urn:oasis:names:tc:opendocument:xmlns:office:1.0"
     private const val NS_TEXT = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
     private const val NS_TABLE = "urn:oasis:names:tc:opendocument:xmlns:table:1.0"
     private const val NS_XLINK = "http://www.w3.org/1999/xlink"
+
+    /** 单次解析共享的图片字节预算，防止全篇图片常驻导致 OOM。 */
+    private class ImageBudget(var total: Long = 0L, var cappedNote: String? = null)
 
     fun parse(file: File): List<Block> {
         ZipFile(file).use { zip ->
@@ -40,6 +53,7 @@ object OdfParser {
             parser.setFeature(XmlPullParser.FEATURE_PROCESS_NAMESPACES, true)
             parser.setInput(zip.getInputStream(contentEntry), "UTF-8")
             val blocks = mutableListOf<Block>()
+            val budget = ImageBudget()
             var inBody = false
             var event = parser.eventType
             while (event != XmlPullParser.END_DOCUMENT) {
@@ -53,19 +67,20 @@ object OdfParser {
                         } else if (inBody) {
                             when {
                                 name == "h" && parser.namespace == NS_TEXT -> {
+                                    // outline-level 必须在 readParagraph 消费子树之前读取
                                     val level = parser.getAttributeValue(null, "outline-level")
                                         ?.toIntOrNull() ?: 1
-                                    val (text, images) = readParagraph(parser, zip)
+                                    val (text, images) = readParagraph(parser, zip, budget)
                                     blocks += Block.Heading(level, text)
                                     blocks += images
                                 }
                                 name == "p" && parser.namespace == NS_TEXT -> {
-                                    val (text, images) = readParagraph(parser, zip)
+                                    val (text, images) = readParagraph(parser, zip, budget)
                                     blocks += Block.Paragraph(text)
                                     blocks += images
                                 }
                                 name == "list-item" && parser.namespace == NS_TEXT -> {
-                                    val (text, images) = readParagraph(parser, zip)
+                                    val (text, images) = readParagraph(parser, zip, budget)
                                     blocks += Block.ListItem(text)
                                     blocks += images
                                 }
@@ -87,6 +102,9 @@ object OdfParser {
                 }
                 event = parser.next()
             }
+            if (budget.cappedNote != null) {
+                blocks += Block.Paragraph(budget.cappedNote!!)
+            }
             return blocks
         }
     }
@@ -98,7 +116,8 @@ object OdfParser {
      */
     private fun readParagraph(
         parser: XmlPullParser,
-        zip: ZipFile
+        zip: ZipFile,
+        budget: ImageBudget
     ): Pair<String, List<Block.Image>> {
         val builder = StringBuilder()
         val images = mutableListOf<Block.Image>()
@@ -121,8 +140,31 @@ object OdfParser {
                             val entryName = href.removePrefix("#").removePrefix("./")
                             val entry = zip.getEntry(entryName)
                             if (entry != null) {
-                                val bytes = zip.getInputStream(entry).use { it.readBytes() }
-                                if (bytes.isNotEmpty()) images += Block.Image(bytes)
+                                val known = entry.size  // -1 表示未知
+                                if (budget.cappedNote != null) {
+                                    // 总量已超限：不再读字节（note 已在文末统一提示）
+                                } else if (known in 1..Long.MAX_VALUE && known > MAX_IMAGE_BYTES) {
+                                    images += Block.Image(
+                                        ByteArray(0),
+                                        "内嵌图片过大（${known / 1024 / 1024} MiB），未载入"
+                                    )
+                                    budget.total += known
+                                } else {
+                                    val bytes = zip.getInputStream(entry).use { it.readBytes() }
+                                    if (bytes.isNotEmpty()) {
+                                        if (bytes.size > MAX_IMAGE_BYTES ||
+                                            budget.total + bytes.size > MAX_TOTAL_IMAGE_BYTES
+                                        ) {
+                                            budget.cappedNote = "内嵌图片总大小超过 " +
+                                                "${MAX_TOTAL_IMAGE_BYTES / 1024 / 1024} MiB 上限，" +
+                                                "为避免内存不足，后续图片未载入"
+                                            images += Block.Image(ByteArray(0), budget.cappedNote!!)
+                                        } else {
+                                            budget.total += bytes.size
+                                            images += Block.Image(bytes)
+                                        }
+                                    }
+                                }
                             }
                             inImageSubtree = balance
                         }

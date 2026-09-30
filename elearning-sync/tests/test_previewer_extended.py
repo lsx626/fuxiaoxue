@@ -19,6 +19,7 @@ from fudan_sync.bootstrap import ensure_qtmultimedia
 from fudan_sync.gui.previewer import (
     DocumentPreviewDialog,
     _decode_rtf_text,
+    _decode_text_bytes,
     _detect_type,
     _extract_docx_blocks,
     _extract_pptx_slides,
@@ -72,6 +73,28 @@ def test_detects_common_media_and_office_extensions(tmp_path):
 def test_rtf_decodes_cp936_hex_bytes():
     source = r"{\rtf1\ansi\ansicpg936 \'b2\'e2\'ca\'d4}"
     assert _decode_rtf_text(source) == "测试"
+
+
+def test_decode_text_bytes_handles_bom_encodings_and_gb18030(tmp_path):
+    import codecs as _codecs
+
+    utf16 = tmp_path / "notes_utf16.txt"
+    utf16.write_bytes(_codecs.BOM_UTF16_LE + "复小学阅读".encode("utf-16-le"))
+    assert _decode_text_bytes(str(utf16), 4096) == "复小学阅读"
+
+    utf32 = tmp_path / "notes_utf32.txt"
+    utf32.write_bytes(_codecs.BOM_UTF32_LE + "复小学阅读".encode("utf-32-le"))
+    assert _decode_text_bytes(str(utf32), 4096) == "复小学阅读"
+
+    # UTF-8 BOM 必须去掉前缀，否则会显示为零宽空字符
+    utf8 = tmp_path / "notes_utf8.txt"
+    utf8.write_bytes(_codecs.BOM_UTF8 + "复小学".encode("utf-8"))
+    assert _decode_text_bytes(str(utf8), 4096) == "复小学"
+
+    # 无 BOM 的 GB18030：纯 UTF-8 解码会出替换字符，应回退
+    gb = tmp_path / "notes_gb.txt"
+    gb.write_bytes("复小学阅读".encode("gb18030"))
+    assert _decode_text_bytes(str(gb), 4096) == "复小学阅读"
 
 
 def test_rtf_decodes_unicode_and_skips_fallback_characters():
@@ -448,6 +471,41 @@ def test_office_result_arriving_after_close_is_removed(tmp_path):
     assert not output_dir.exists()
     assert loaded == []
     assert fallbacks == []
+
+
+def test_office_result_for_previous_sibling_is_discarded(tmp_path):
+    """v1.2.1 回归：翻文件后迟到的旧转换结果必须整体丢弃。
+
+    旧实现不校验结果对应的源文件，迟到的旧 PDF 会覆盖新文件预览，
+    且新文件的临时目录被孤立泄漏。
+    """
+    old_source = tmp_path / "old.docx"
+    output_dir = tmp_path / "stale-render"
+    output_dir.mkdir()
+    output_path = output_dir / "old.pdf"
+    output_path.write_bytes(b"%PDF-1.7\n")
+    holder = _office_result_holder()
+    holder._original_file_path = str(tmp_path / "new.docx")
+    holder._pending_office_dirs.add(str(output_dir))
+    holder._discard_office_result = MethodType(
+        DocumentPreviewDialog._discard_office_result, holder
+    )
+    loaded = []
+    fallbacks = []
+    holder._load_pdf_preview = loaded.append
+    holder._load_structured_office_preview = fallbacks.append
+
+    DocumentPreviewDialog._on_office_rendered(
+        holder, str(output_path), str(output_dir), str(old_source)
+    )
+
+    assert loaded == []
+    assert fallbacks == []
+    assert not output_dir.exists()
+    assert not holder._pending_office_dirs
+    # 新文件的路径没有被旧结果污染
+    assert holder.file_path == "lesson.docx"
+    assert holder._temp_pdf_path is None
 
 
 def test_office_worker_cleans_output_after_dialog_is_destroyed(tmp_path):

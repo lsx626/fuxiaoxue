@@ -4,7 +4,6 @@ import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -66,23 +65,88 @@ fun OdfDocumentScreen(file: File) {
             CircularProgressIndicator()
         }
         is OdfParseState.Error -> PreviewError(s.message, title = "无法显示文档")
-        is OdfParseState.Ready -> LazyColumn(
-            Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            item {
-                Text(
-                    "ODF 文档视图：结构化渲染文本、表格与图片；分栏/脚注等复杂排版不保证还原。",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-            }
-            items(s.blocks.size) { index ->
-                OdfBlockView(s.blocks[index])
+        is OdfParseState.Ready -> {
+            // v1.2.1：表格按行拆成独立 lazy item——整张表塞进一个 Column 会
+            // 一次性测量数千行，LazyColumn 的懒加载对表格完全失效。
+            val renderItems = remember(s.blocks) { flattenBlocks(s.blocks) }
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                item {
+                    Text(
+                        "ODF 文档视图：结构化渲染文本、表格与图片；分栏/脚注等复杂排版不保证还原。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                }
+                items(renderItems.size) { index ->
+                    OdfItemView(renderItems[index])
+                }
             }
         }
+    }
+}
+
+/** 表格截断阈值（与桌面端 CSV 「1000 行/40 列」的保守风格一致）。 */
+private const val MAX_TABLE_ROWS = 300
+private const val MAX_TABLE_COLS = 20
+
+/** 懒加载渲染条目：块、表格行、截断/提示说明。 */
+private sealed class RenderItem {
+    data class BlockItem(val block: OdfParser.Block) : RenderItem()
+    data class TableRow(val text: String) : RenderItem()
+    data class Note(val text: String) : RenderItem()
+}
+
+/** 把 Block 列表展开成可懒加载的条目；Table 拆成逐行 item 并按需截断。 */
+private fun flattenBlocks(blocks: List<OdfParser.Block>): List<RenderItem> {
+    val out = mutableListOf<RenderItem>()
+    for (block in blocks) {
+        if (block !is OdfParser.Block.Table) {
+            out += RenderItem.BlockItem(block)
+            continue
+        }
+        if (block.rows.isEmpty()) continue
+        val truncatedRows = block.rows.size > MAX_TABLE_ROWS
+        val truncatedCols = block.rows.any { it.size > MAX_TABLE_COLS }
+        block.rows.take(MAX_TABLE_ROWS).forEach { row ->
+            out += RenderItem.TableRow(
+                row.take(MAX_TABLE_COLS).joinToString(" ｜ ") +
+                    if (row.size > MAX_TABLE_COLS) " ｜ …" else ""
+            )
+        }
+        if (truncatedRows || truncatedCols) {
+            val colCount = block.rows.maxOf { it.size }
+            val detail = buildString {
+                append("表格较大（${block.rows.size} 行")
+                if (truncatedCols) append(" × $colCount 列")
+                append("）：仅显示前 $MAX_TABLE_ROWS 行 / 前 $MAX_TABLE_COLS 列")
+            }
+            out += RenderItem.Note(detail)
+        }
+    }
+    return out
+}
+
+@Composable
+private fun OdfItemView(item: RenderItem) {
+    when (item) {
+        is RenderItem.BlockItem -> OdfBlockView(item.block)
+        is RenderItem.TableRow -> Text(
+            item.text,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        is RenderItem.Note -> Text(
+            item.text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -112,33 +176,35 @@ private fun OdfBlockView(block: OdfParser.Block) {
                 modifier = Modifier.weight(1f)
             )
         }
-        is OdfParser.Block.Table -> Column(
-            Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            block.rows.forEach { row ->
-                Text(
-                    row.joinToString(" ｜ "),
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+        is OdfParser.Block.Table -> {
+            // flattenBlocks 已把表格拆成逐行 lazy item；此分支只保证 when 穷尽，
+            // 正常渲染路径不会到达。
         }
         is OdfParser.Block.Image -> {
+            // 大图先降采样再入模型（与 WordExtractor.downscaleImage 同一策略），
+            // 避免 8 MiB 上限内的图片仍以原始分辨率常驻。
             val bitmap = remember(block.data) {
-                runCatching { BitmapFactory.decodeByteArray(block.data, 0, block.data.size) }
-                    .getOrNull()?.asImageBitmap()
+                if (block.data.isEmpty()) null
+                else runCatching {
+                    val options = BitmapFactory.Options().apply {
+                        inSampleSize = if (block.data.size > 2L * 1024 * 1024) 2 else 1
+                    }
+                    BitmapFactory.decodeByteArray(block.data, 0, block.data.size, options)
+                        ?.asImageBitmap()
+                }.getOrNull()
             }
-            if (bitmap != null) {
-                Image(
+            when {
+                block.note.isNotEmpty() -> Text(
+                    "（$block.note）",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                bitmap != null -> Image(
                     bitmap = bitmap,
                     contentDescription = "文档内嵌图片",
                     modifier = Modifier.fillMaxWidth()
                 )
-            } else {
-                Text(
+                else -> Text(
                     "（内嵌图片无法解码）",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant

@@ -34,10 +34,12 @@ private const val MAX_BYTES = 2L * 1024 * 1024
  */
 @Composable
 fun TextPreviewScreen(file: File) {
-    var content by remember { mutableStateOf("") }
-    var truncated by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var fileSize by remember { mutableStateOf(0L) }
+    // v1.2.1：状态以 file 键化——预览内翻文件时旧正文不会滞留在新标题下。
+    val fileKey = file.absolutePath
+    var content by remember(fileKey) { mutableStateOf("") }
+    var truncated by remember(fileKey) { mutableStateOf(false) }
+    var error by remember(fileKey) { mutableStateOf<String?>(null) }
+    var fileSize by remember(fileKey) { mutableStateOf(0L) }
 
     LaunchedEffect(file.absolutePath) {
         withContext(Dispatchers.IO) {

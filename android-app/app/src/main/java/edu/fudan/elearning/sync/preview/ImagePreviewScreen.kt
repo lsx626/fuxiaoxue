@@ -57,17 +57,29 @@ fun ImagePreviewScreen(file: File) {
             },
         contentAlignment = Alignment.Center
     ) {
-        AsyncImage(
-            model = ImageRequest.Builder(LocalContext.current)
-                .data(file)
-                .crossfade(true)
-                .build(),
-            contentDescription = file.name,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize().graphicsLayer(
-                scaleX = scale, scaleY = scale,
-                translationX = offset.x, translationY = offset.y
+        // v1.2.1：解码失败不能只显示纯黑背景——给 error 占位与明确文案
+        var loadFailed by remember(file.absolutePath) { mutableStateOf(false) }
+        if (loadFailed) {
+            PreviewError(
+                "图片解码失败：文件可能已损坏，或当前设备不支持该格式" +
+                    "（如部分 HEIF/AVIF 变体），可通过分享交给其他应用查看。",
+                title = "无法显示图片"
             )
-        )
+        } else {
+            AsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(file)
+                    .crossfade(true)
+                    .build(),
+                contentDescription = file.name,
+                contentScale = ContentScale.Fit,
+                onError = { loadFailed = true },
+                error = null,
+                modifier = Modifier.fillMaxSize().graphicsLayer(
+                    scaleX = scale, scaleY = scale,
+                    translationX = offset.x, translationY = offset.y
+                )
+            )
+        }
     }
 }

@@ -572,12 +572,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 搜索结果点击：直接打开应用内预览，并关闭搜索页。 */
     fun openSearchResult(result: SearchResult) {
-        val file = repo.getFile(result.fileId) ?: run {
-            toast("该文件记录已不存在")
-            return
+        viewModelScope.launch {
+            // v1.2.1：repo.getFile 是 SQLite 查询，不得在主线程执行（§8 硬性约束）
+            val file = withContext(Dispatchers.IO) {
+                runCatching { repo.getFile(result.fileId) }.getOrNull()
+            }
+            if (file == null) {
+                toast("该文件记录已不存在")
+                return@launch
+            }
+            closeSearch()
+            openPreview(file)
         }
-        closeSearch()
-        openPreview(file)
     }
 
     /** 打开应用内预览（取代旧的 ACTION_VIEW 跳转）。 */
@@ -662,6 +668,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 在预览内切到同课程的上一个/下一个文件（delta = -1 / +1）。 */
+    private var previewNavJob: kotlinx.coroutines.Job? = null
+
     fun navigatePreviewSibling(delta: Int) {
         val target = _previewTarget.value ?: return
         if (target.siblings.size <= 1) return
@@ -670,7 +678,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val newIndex = index + delta
         if (newIndex !in target.siblings.indices) return
         val sibling = target.siblings[newIndex]
-        viewModelScope.launch {
+        // v1.2.1：取消未完成的上一次导航——快速连点时 IO 协程乱序完成会让最终落点
+        // 与用户最后一次操作不符；这里保证「最后一次点击胜出」。
+        previewNavJob?.cancel()
+        previewNavJob = viewModelScope.launch {
             val context = withContext(Dispatchers.IO) {
                 runCatching {
                     val item = repo.getFile(sibling.fileId)
@@ -681,8 +692,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 java.io.File(sibling.path),
                 sibling.title,
                 fileId = sibling.fileId,
-                courseId = target.courseId,
-                siblings = target.siblings,
+                courseId = context?.courseId ?: target.courseId,
+                // v1.2.1：兄弟清单按新文件重新构建——预览期间新下载的文件也能翻到
+                siblings = context?.siblings ?: target.siblings,
                 initialPage = context?.initialPage ?: -1,
                 initialMediaSec = context?.initialMediaSec ?: -1
             )

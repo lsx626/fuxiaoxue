@@ -57,15 +57,20 @@ fun MediaPreviewScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    var isPlaying by remember { mutableStateOf(false) }
-    var position by remember { mutableLongStateOf(0L) }
-    var duration by remember { mutableLongStateOf(0L) }
+    // v1.2.1：这些状态必须随文件切换重置，否则翻文件时旧文件的播放状态/错误
+    // 会冒充新文件（预览内翻文件 navigatePreviewSibling 会换掉 file）。
+    val fileKey = file.absolutePath
+    var isPlaying by remember(fileKey) { mutableStateOf(false) }
+    var position by remember(fileKey) { mutableLongStateOf(0L) }
+    var duration by remember(fileKey) { mutableLongStateOf(0L) }
+    var errorMessage by remember(fileKey) { mutableStateOf<String?>(null) }
+    var isReady by remember(fileKey) { mutableStateOf(false) }
     var volume by remember { mutableFloatStateOf(1f) }
     var looping by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-    var isReady by remember { mutableStateOf(false) }
 
-    val player = remember {
+    // v1.2.1：player 以 fileKey 键化——翻文件切换音视频时旧 player 随组合丢弃；
+    // 配合下面的 DisposableEffect(player) 在切换瞬间释放旧实例，避免旧媒体继续出声。
+    val player = remember(fileKey) {
         ExoPlayer.Builder(context).build().apply {
             setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
             prepare()
@@ -97,8 +102,8 @@ fun MediaPreviewScreen(
         }
     }
 
-    // 生命周期：后台暂停，离开组合时释放
-    DisposableEffect(lifecycleOwner) {
+    // 生命周期：后台暂停，离开组合时释放；player 切换（翻文件）时也释放旧实例
+    DisposableEffect(lifecycleOwner, player) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
                 player.pause()
@@ -111,8 +116,8 @@ fun MediaPreviewScreen(
         }
     }
 
-    // v1.1.2：恢复上次播放位置（就绪后 seekOnce）
-    LaunchedEffect(isReady, initialPositionSec) {
+    // v1.1.2：恢复上次播放位置（就绪后 seekOnce）；fileKey 变化时重新触发
+    LaunchedEffect(isReady, initialPositionSec, fileKey) {
         if (isReady && initialPositionSec > 0) {
             // 恢复到上次位置的前 2 秒，避免从句子正中间断开
             player.seekTo((initialPositionSec - 2).coerceAtLeast(0) * 1000L)

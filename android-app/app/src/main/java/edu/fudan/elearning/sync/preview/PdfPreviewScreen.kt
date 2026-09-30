@@ -18,6 +18,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -50,6 +51,13 @@ fun PdfPreviewScreen(
                 }
                 source = PdfPageSource(pfd, renderer)
                 loadState = PdfLoadState.Ready(renderer.pageCount)
+                // v1.2.1：取消窗口——构造 PdfRenderer 期间翻文件或退出预览时，
+                // onDispose 已经跑过且当时 source 还是 null，新构造的句柄必须在这
+                // 里主动关闭，否则只能等 finalizer 兜底（可能永不释放）。
+                if (!coroutineContext.isActive) {
+                    runCatching { source?.close() }
+                    source = null
+                }
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 // 离开预览的取消必须原样抛出，绝不能当成「解析失败」
                 throw cancelled

@@ -41,10 +41,12 @@ private const val MAX_HTML_BYTES = 4L * 1024 * 1024
  */
 @Composable
 fun HtmlPreviewScreen(file: File) {
-    var html by remember { mutableStateOf<String?>(null) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var truncated by remember { mutableStateOf(false) }
-    var fileSize by remember { mutableStateOf(0L) }
+    // v1.2.1：状态以 file 键化——预览内翻文件时旧正文不会滞留冒充新文件。
+    val fileKey = file.absolutePath
+    var html by remember(fileKey) { mutableStateOf<String?>(null) }
+    var error by remember(fileKey) { mutableStateOf<String?>(null) }
+    var truncated by remember(fileKey) { mutableStateOf(false) }
+    var fileSize by remember(fileKey) { mutableStateOf(0L) }
 
     LaunchedEffect(file.absolutePath) {
         withContext(Dispatchers.IO) {

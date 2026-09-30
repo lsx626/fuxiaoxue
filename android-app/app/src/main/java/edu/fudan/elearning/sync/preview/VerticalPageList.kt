@@ -245,7 +245,9 @@ fun VerticalPageList(
                 TextButton(onClick = {
                     val page = (pageText.toIntOrNull() ?: sliderValue.toInt())
                         .coerceIn(1, pageCount)
-                    scope.launch { listState.scrollToItem(0 + page - 1) }
+                    // 与续读恢复路径一致：header 存在时目标索引要整体后移 headerOffset，
+                    // 否则 Office 预览（带保真度说明 header）会恒定跳到前一格。
+                    scope.launch { listState.scrollToItem(headerOffset + page - 1) }
                     showJumpDialog = false
                 }) {
                     Text(stringResource(R.string.preview_jump_confirm))

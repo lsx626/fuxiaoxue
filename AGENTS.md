@@ -82,6 +82,26 @@
 
 **v1.2.0 发布验收（2026-09-30）**：v1.1.1（观感与操控）+ v1.1.2（阅读体验）合并发布为 v1.2.0（双端；桌面 VERSION/`__init__.py`/setup.iss 与 Android versionCode 16/versionName 1.2.0）。测试：桌面 149 passed、Android JVM 109 passed、插桩 38 passed（fxx_test_api36 无头模拟器，`am instrument` 通道）。Windows EXE 与安装器**无 Authenticode 签名**（本机无证书，`NotSigned` 如实记录）；未运行 connectedDebugAndroidTest（本轮 Android 行为改动由插桩 38 项覆盖）。
 
+`v1.2.1`（开发中，未发布；双端预览链路审计修复，全部为显示/资源层，数据语义不变）：
+
+- **桌面 Office 迟到结果按源文件校验**（回归）：`_OfficeRenderSignals.finished` 扩为 `(path, dir, source)`，`_on_office_rendered` 丢弃翻文件后到达的旧转换结果（此前旧 PDF 会覆盖新文件预览且泄漏新文件的临时目录）；`_navigate_sibling` 停止并释放旧 `QMediaPlayer/QAudioOutput/QVideoWidget` 及其信号（此前旧 player 的 positionChanged 会驱动新控件、污染进度列，旧实例累积存活）。
+- **桌面进度写库长连接 + 防抖**（回归）：对话框持有单个 `StateStore`（`_progress_store()`，`_cleanup_resources` 关闭），不再每翻一页/每 2 秒新建连接跑建表脚本并抢类级写锁；页码变化改 500ms `QTimer` 防抖（与 Android 口径一致，也修正了本文档此前「桌面 500ms 防抖」的错误宣称——v1.2.0 前桌面端并无防抖）。
+- **桌面文本编码**：`_decode_text_bytes` 按 BOM 嗅探 UTF-8/16/32（此前 UTF-16/32 文件显示夹带 `\x00` 的乱码），无 BOM 时 UTF-8 出现替换字符回退 GB18030（与 Android 一致）；CSV/TSV 预览同链路，且超 1000 行/40 列时**末行如实标注截断**（此前静默截断）。
+- **桌面 Excel 公式值**：openpyxl 改 `data_only=True` 优先取缓存计算值，无缓存（openpyxl 自写文件）回退公式文本（与 Android `DataFormatter` 同口径）。
+- **桌面媒体续读时机**：续读 seek 延迟到 `LoadedMedia/BufferedMedia` 状态到达才应用（`_pending_media_seek_ms`），不再在 `setSource` 后立即 seek 被静默丢弃。
+- **桌面预览翻文件边界按钮**：翻到同课程首/尾文件时 prev/next 按钮按位置禁用，tooltip 标注「第 N/M 个 · 已是第一个/最后一个」（此前恒可点）。
+- **Android Office 预览进度接线**（回归）：`PreviewScreen` 的 `PreviewKind.OFFICE` 分支补传 `initialPage/onPageChanged`——v1.2.0 里六格式 Office 预览既不恢复上次页也不落库，续读/未读排序对 Office 完全失效。
+- **Android 跳页偏移**（回归）：`VerticalPageList` 跳页确认改为 `scrollToItem(headerOffset + page - 1)`——v1.0.13 只修了续读恢复路径，带 header（Office 保真度说明卡）的预览跳第 N 页恒定落到第 N-1 页。
+- **Android 媒体翻文件**（回归）：`MediaPreviewScreen` 的 player 与播放状态以 `file.absolutePath` 键化，`DisposableEffect(lifecycleOwner, player)` 在切换时释放旧实例（此前旧文件声音继续播放、续读 seek 到旧文件错误位置）。
+- **Android 文本/HTML/降级预览状态键化**：`Text/Html/OfficeFallback` 屏的 content/note 状态以 `file.absolutePath` 键化（翻文件时旧正文不再滞留冒充新文件）。
+- **Android navigatePreviewSibling 竞态与兄弟清单刷新**：导航协程串行化（`previewNavJob` 取消上一次未完成的导航，快速连点时「最后一次点击胜出」），兄弟清单按新文件重建（预览期间新下载的文件也能翻到）。
+- **Android openSearchResult 主线程 SQLite**：`repo.getFile` 包进 `withContext(Dispatchers.IO)`（违反 §8 硬性约束）。
+- **Android ODF 内存**：`OdfParser` 单图 8 MiB / 全篇 64 MiB 字节上限，超限显示「内嵌图片过大/总量超限，未载入」而非假装解码失败；解码时 >2 MiB 的图按 inSampleSize=2 降采样；整张表格拆成逐行 lazy item（此前数千行表格在一个 Column 里一次性测量，LazyColumn 懒加载失效），超 300 行/20 列如实截断说明。
+- **Android PDF 取消窗口**：`PdfPreviewScreen` 在 `PdfPageSource` 赋值后检查 `coroutineContext.isActive`，取消时立即关闭 renderer/pfd（此前 onDispose 已跑过、句柄只能等 finalizer）。
+- **Android 图片解码失败占位**：`ImagePreviewScreen` 的 `AsyncImage` 加 `onError` → 结构化错误卡（此前纯黑背景无说明）。
+
+**测试**：桌面 151 passed（新增 2 项：`test_office_result_for_previous_sibling_is_discarded`、`test_decode_text_bytes_handles_bom_encodings_and_gb18030`）。
+
 ## 2. 信息优先级
 
 发生冲突时按以下优先级判断：
@@ -214,7 +234,7 @@ cd elearning-sync
 .\.packaging-venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp="$env:TEMP\fxx-pytest-bt"
 ```
 
-`v1.0.7` 起桌面测试基线为 **68 passed**（含新增 `tests/test_desktop_p1_fixes.py`）；`v1.0.13` 起基线为 **80 passed**（新增 `tests/test_desktop_p2_fixes.py` 6 项：设置根目录持久化、`update_config` 键路径拒绝字符串、自启引号结构、原子写入）。`v1.1.0` 开发分支起基线为 **133 passed**（新增 `tests/test_search_index.py` 41 项：CJK 分词器、查询表达式、文本抽取器、FTS 索引读写删、引擎集成回填；`tests/test_search_ui.py` 1 项：搜索对话框与主窗口联动的 offscreen 子进程烟测；`tests/test_deadlines_and_changes.py` 11 项：作业采集与排序、assignments 表整课替换、变更记录与保留窗口、.ics 构造、引擎 new/updated 落库）。`v1.1.1` 开发分支起基线为 **142 passed**（新增 `tests/test_utils_display.py` 9 项：课程名清洗的前后/括号/多代码/仅代码/英文保留/空串各分支）。`v1.1.2` 开发分支起基线为 **149 passed**（新增 `tests/test_reading_progress.py` 7 项：进度读写与覆盖、按课程批量查询、路径反查、清课清理、关库重开持久化、未读优先排序、PyMuPDF 降级全页渲染）。
+`v1.0.7` 起桌面测试基线为 **68 passed**（含新增 `tests/test_desktop_p1_fixes.py`）；`v1.0.13` 起基线为 **80 passed**（新增 `tests/test_desktop_p2_fixes.py` 6 项：设置根目录持久化、`update_config` 键路径拒绝字符串、自启引号结构、原子写入）。`v1.1.0` 开发分支起基线为 **133 passed**（新增 `tests/test_search_index.py` 41 项：CJK 分词器、查询表达式、文本抽取器、FTS 索引读写删、引擎集成回填；`tests/test_search_ui.py` 1 项：搜索对话框与主窗口联动的 offscreen 子进程烟测；`tests/test_deadlines_and_changes.py` 11 项：作业采集与排序、assignments 表整课替换、变更记录与保留窗口、.ics 构造、引擎 new/updated 落库）。`v1.1.1` 开发分支起基线为 **142 passed**（新增 `tests/test_utils_display.py` 9 项：课程名清洗的前后/括号/多代码/仅代码/英文保留/空串各分支）。`v1.1.2` 开发分支起基线为 **149 passed**（新增 `tests/test_reading_progress.py` 7 项：进度读写与覆盖、按课程批量查询、路径反查、清课清理、关库重开持久化、未读优先排序、PyMuPDF 降级全页渲染）。`v1.2.1` 开发分支起基线为 **151 passed**（新增 `test_previewer_extended.py` 2 项：翻文件后迟到 Office 结果被丢弃、BOM 编码/GB18030 解码）。
 
 **`.packaging-venv` 二进制错配的排查与修复（2026-09-30 实证）**：该 venv 是 Python **3.14.6**，但 `lxml/Pillow/PyYAML/charset-normalizer/greenlet` 的编译扩展是 **cp313**，导入时报 `cannot import name 'etree' from 'lxml'` / `cannot import name '_imaging' from 'PIL'`。连锁后果是 `python-docx`、`python-pptx`、`odfpy`（Pillow 还影响图片预览降级）全部静默不可导入——所有预览降级路径与 Office 结构化抽取在发布环境里其实一直是坏的，但因为代码做了优雅降级，不跑导入探针根本发现不了。修复方式：`.\.packaging-venv\Scripts\python.exe -m pip install --force-reinstall --no-cache-dir lxml Pillow PyYAML charset-normalizer greenlet`。**以后每轮发布前必须跑导入探针**（`import docx, pptx, PIL.Image, yaml, lxml.etree`），不要假设 venv 里的二进制包与解释器匹配。
 
@@ -610,7 +630,7 @@ Downloader 只处理同步引擎已经判定需要下载的任务，不能再次
 
 - PDF：优先 `QPdfDocument + QPdfView`，多页并适配宽度；失败时用 PyMuPDF 降级，`v1.1.2` 起渲染全部页面（纵向连续滚动、30 页上限 + 超页说明，旧版只渲染第一页）。
 - 图片：PNG、JPEG、GIF、BMP、WebP、ICO、SVG、TIFF、AVIF、HEIC、HEIF。GIF 用 QMovie，SVG 用 QtSvg；Qt 解码失败时用 Pillow/pillow-heif。
-- 文本和代码：常见源码、日志、Markdown、JSON、XML 等；UTF-8-sig 解码并容错，最多读取 2 MiB。
+- 文本和代码：常见源码、日志、Markdown、JSON、XML 等；`v1.2.1` 起按 BOM 嗅探 UTF-8/16/32、无 BOM 时 UTF-8 出现替换字符回退 GB18030，最多读取 2 MiB。
 - HTML：QTextBrowser 内显示，最多 4 MiB，外部导航默认受控。
 - CSV/TSV：最多 1000 行、40 列，避免超大文件冻结 UI。
 - RTF：自有控制字、Unicode 和代码页解码。
@@ -702,6 +722,10 @@ Downloader 只处理同步引擎已经判定需要下载的任务，不能再次
 & 'D:\Sdk\emulator\emulator.exe' -avd fxx_test_api36 -no-window -no-audio -no-boot-anim `
   -gpu swiftshader_indirect -feature -Vulkan -no-snapshot-load -ports 5554,5555
 ```
+
+**`-gpu swiftshader_indirect` 会挂死时改用 `-gpu guest`（v1.2.1 实测）**：2026-09-30 晚些时候起，上述组合（含 `-no-snapshot` 冷启动）在本机表现为 qemu 进程在跑、但 5554/5555 端口永不监听、`adb devices` 恒为空，约 20 分钟无进展；改 `-gpu guest` 后约 1.5 分钟即可 `getprop sys.boot_completed` 返回 1。若再次遇到「qemu 活着但 adb 看不到设备」，先换 `-gpu guest`，并顺手清掉 AVD 目录下残留的 `*.lock`（`hardware-qemu.ini.lock` 被旧进程占用时 adb 侧表现一致）。
+
+**v1.2.1 插桩复核**：38 tests OK（`am instrument` 通道，`-gpu guest` 无头模拟器），覆盖 OdfParser 图片字节上限、表格 lazy 拆行与截断说明的改动。
 
 **不走 Gradle 跑插桩测试**（Gradle/JDK 出问题时的备用通道，也是本轮实际使用的方式）：
 
