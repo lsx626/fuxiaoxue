@@ -1101,15 +1101,30 @@ class DocumentPreviewDialog(QDialog):
         self._load_preview()
 
     def _update_sibling_buttons(self) -> None:
-        enabled = len(self._sibling_paths) > 1
-        if getattr(self, "prev_file_btn", None) is not None:
-            self.prev_file_btn.setEnabled(enabled)
-            self.next_file_btn.setEnabled(enabled)
-            if enabled:
-                self.prev_file_btn.setToolTip(
-                    f"同一课程的上一个文件（Alt+←）· 共 {len(self._sibling_paths)} 个")
-                self.next_file_btn.setToolTip(
-                    f"同一课程的下一个文件（Alt+→）· 共 {len(self._sibling_paths)} 个")
+        if getattr(self, "prev_file_btn", None) is None:
+            return
+        paths = self._sibling_paths or []
+        count = len(paths)
+        if count <= 1:
+            self.prev_file_btn.setEnabled(False)
+            self.next_file_btn.setEnabled(False)
+            self.prev_file_btn.setToolTip("同一课程的上一个文件（Alt+←）")
+            self.next_file_btn.setToolTip("同一课程的下一个文件（Alt+→）")
+            return
+        index = -1
+        try:
+            index = paths.index(self._original_file_path)
+        except ValueError:
+            pass
+        has_prev = index > 0
+        has_next = 0 <= index < count - 1
+        self.prev_file_btn.setEnabled(has_prev)
+        self.next_file_btn.setEnabled(has_next)
+        position = f"第 {index + 1}/{count} 个" if index >= 0 else f"共 {count} 个"
+        self.prev_file_btn.setToolTip(
+            f"同一课程的上一个文件（Alt+←）· {position}" + ("" if has_prev else " · 已是第一个"))
+        self.next_file_btn.setToolTip(
+            f"同一课程的下一个文件（Alt+→）· {position}" + ("" if has_next else " · 已是最后一个"))
 
     def _set_preview_widget(self, widget: QWidget) -> None:
         # QScrollArea owns its current widget and destroys it when setWidget()
