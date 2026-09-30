@@ -14,8 +14,8 @@ android {
         applicationId = "edu.fudan.elearning.sync"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "1.0.12"
+        versionCode = 15
+        versionName = "1.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // POI 方法数较多，需要 multidex
         multiDexEnabled = true
@@ -120,6 +120,8 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
+    // rememberSaveable 所在 artifact（旋转/进程重建时保留界面状态）
+    implementation("androidx.compose.runtime:runtime-saveable")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")

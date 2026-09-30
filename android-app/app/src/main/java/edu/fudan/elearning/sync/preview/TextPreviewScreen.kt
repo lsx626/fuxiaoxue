@@ -45,7 +45,16 @@ fun TextPreviewScreen(file: File) {
                 fileSize = file.length()
                 val limit = minOf(fileSize, MAX_BYTES)
                 val raw = ByteArray(limit.toInt().coerceAtLeast(0))
-                file.inputStream().use { it.read(raw) }
+                file.inputStream().use { stream ->
+                    // InputStream.read 不保证一次读满：必须循环读到 EOF 或缓冲满，
+                    // 否则大文件会被静默截断（还不会触发 truncated 提示）
+                    var offset = 0
+                    while (offset < raw.size) {
+                        val read = stream.read(raw, offset, raw.size - offset)
+                        if (read <= 0) break
+                        offset += read
+                    }
+                }
                 // 去掉 UTF-8 BOM
                 val start = if (raw.size >= 3 &&
                     raw[0] == 0xEF.toByte() && raw[1] == 0xBB.toByte() && raw[2] == 0xBF.toByte()

@@ -33,6 +33,18 @@ object DownloadPlan {
             .joinToString("/")
     }
 
+    /**
+     * 打开断点文件的写入流。
+     *
+     * **关键实现细节（曾出过真实缺陷）**：`File.outputStream()` 等价于
+     * `FileOutputStream(file)`，打开时**会截断已有内容**；只有追加模式
+     * `FileOutputStream(file, true)` 才能在续传时保留已下载的字节。
+     * 续传分支（206 响应）必须传 `append = true`，否则会把已下载的头部
+     * 截掉、只留下尾部片段，产生长度不符的损坏文件。
+     */
+    fun partOutputStream(part: File, append: Boolean): java.io.FileOutputStream =
+        if (append) java.io.FileOutputStream(part, true) else part.outputStream()
+
     /** 断点文件路径：`report.pdf` -> `report.pdf.part`。 */
     fun partFile(dest: File): File = File(dest.parentFile, dest.name + PART_SUFFIX)
 

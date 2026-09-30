@@ -14,7 +14,7 @@ from .downloader import DownloadResult, DownloadTask, Downloader
 from .utils import free_space_gb
 from .state import StateStore
 from .utils import (format_size, is_installer_file, now_utc,
-                    sanitize_path_component, unique_path)
+                    sanitize_path_component)
 
 _PAGES_SUBDIR = "_pages"
 _IMG_SRC_RE = re.compile(r'src="(?!https?://|/)([^"]+)"')
@@ -236,7 +236,7 @@ class SyncEngine:
         overall.courses = len(courses)
 
         for idx, course in enumerate(courses, start=1):
-            if self.downloader._stop.is_set():
+            if self.downloader.is_stopped():
                 self._log("warning", "收到中断信号，停止后续同步")
                 break
             self._emit("course_start", {"id": course.id, "name": course.name,
@@ -265,6 +265,10 @@ class SyncEngine:
             errors=overall.errors,
             note="; ".join(overall.notes)[:500],
         )
+        # 同步收尾：给本次没轮到下载的旧文件补内容索引（老库升级后分批完成）
+        self._backfill_search_index()
+        # 变更摘要只保留最近 500 条
+        self.state.trim_changes(500)
         self._summarize(overall)
         return overall
 
@@ -295,6 +299,17 @@ class SyncEngine:
         # 之前已下载的文件若真的在远端被删除，也应正确标记（prune 时同步删本地）。
         # 注意必须传入本轮真实见到的 file_id 列表，否则会把全部文件误判为已删除。
         self._mark_remote_removed(course, result, stats, seen_ids=seen_ids)
+
+        # 作业截止日期落库（与文件独立；采集失败不影响同步，正文归档仅桌面端做）
+        if result.assignments:
+            try:
+                self.state.upsert_assignments(course.id, [
+                    {"assignment_id": a.assignment_id, "name": a.name,
+                     "due_at": a.due_at, "html_url": a.html_url}
+                    for a in result.assignments
+                ])
+            except Exception as exc:  # pylint: disable=broad-except
+                self._log("debug", "作业截止日期落库失败 %s: %s", course.name, exc)
 
         # 空课程（组织站点、未开课课程）：不留空目录
         if self.cfg.sync.skip_empty_courses and not result.files and not result.pages:
@@ -380,6 +395,7 @@ class SyncEngine:
                         stats.bytes_downloaded += res.bytes
                     self.state.mark_downloaded(res.task.file_id, res.local_path,
                                                res.task.size)
+                    self._index_downloaded_file(res)
                 else:
                     stats.files_failed += 1
                     stats.errors += 1
@@ -409,6 +425,10 @@ class SyncEngine:
                                    f"已保留本地文件，下轮重试")
             return
         ids = seen_ids if seen_ids is not None else []
+        # 先记录「远端已删除」变更摘要（必须在状态翻转之前查询，否则
+        # status != 'remote_missing' 的过滤会把它们漏掉），
+        # 再执行标记 / 清理。拉取失败时绝不能记录（可能只是网络抖动）。
+        self.state.record_removed_changes(course.id, ids, course_name=course.name)
         removed = self.state.mark_missing_files(
             course.id, ids, prune=self.cfg.sync.prune,
             prune_root=self.course_local_dir(course))
@@ -417,11 +437,63 @@ class SyncEngine:
             self._log("info", "课程 [%s] 远端已删除 %d 个文件，已清理安全范围内的本地副本",
                       course.name, removed)
 
+    # ------------------------------------------------------------------
+    def _index_downloaded_file(self, res: DownloadResult) -> None:
+        """下载成功后把文件内容写进本地全文索引。
+
+        抽取失败（损坏文件、无解析器的旧格式、二进制）只索引文件名，
+        绝不能让搜索建立失败影响同步本身。
+        """
+        from .search_index import extract_text
+        try:
+            text = extract_text(res.local_path)
+            self.state.upsert_file_index(res.task.file_id, res.task.filename, text)
+        except Exception as exc:  # pylint: disable=broad-except
+            self._log("debug", "建立搜索索引失败 %s: %s", res.task.filename, exc)
+
+    def _backfill_search_index(self) -> None:
+        """给已下载但未索引的文件补索引（每轮限量，大库分多轮完成）。"""
+        try:
+            pending = self.state.unindexed_downloaded_files(limit=200)
+        except Exception:  # pylint: disable=broad-except
+            return
+        if not pending:
+            return
+        from .search_index import extract_text
+        self._log("info", "为 %d 个已下载文件建立内容索引…", len(pending))
+        done = 0
+        for item in pending:
+            if self.downloader.is_stopped():
+                break
+            try:
+                text = extract_text(item.get("local_path"))
+                self.state.upsert_file_index(
+                    item["file_id"], item.get("filename") or "", text)
+                done += 1
+            except Exception as exc:  # pylint: disable=broad-except
+                self._log("debug", "建立搜索索引失败 %s: %s",
+                          item.get("filename"), exc)
+        if done:
+            self._log("info", "内容索引已建立：%d 个文件", done)
+
     def _on_download_done(self, res: DownloadResult, stats: SyncStats) -> None:
-        # 只有真正成功才报“完成”；失败统一由本回调显式标记，
-        # 避免像以前那样把失败也记成“[完成]”，掩盖真实下载失败。
+        # 只有真正成功才报"完成"；失败统一由本回调显式标记，
+        # 避免像以前那样把失败也记成"[完成]"，掩盖真实下载失败。
         name = os.path.basename(res.local_path or res.task.filename)
         if res.success:
+            # 变更摘要：此时数据库里还是**旧**状态（mark_downloaded 在回调之后
+            # 才执行），据此区分「新增」与「更新」。跳过的文件不算变更。
+            change_kind = "updated"
+            try:
+                if not res.skipped:
+                    previous = self.state.get_file(res.task.file_id)
+                    if previous is None or previous.get("status") != "downloaded":
+                        change_kind = "new"
+                    self.state.record_file_change(
+                        0, res.task.file_id, res.task.course_id,
+                        res.task.filename, change_kind)
+            except Exception:  # pylint: disable=broad-except
+                pass
             status = "跳过(已存在)" if res.skipped else "完成"
             self._log("info", "  [%s] %s（%s）", status, name,
                       format_size(res.bytes or res.task.size))

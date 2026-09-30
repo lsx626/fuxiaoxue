@@ -15,6 +15,13 @@ import android.database.sqlite.SQLiteOpenHelper
 class DatabaseHelper(context: Context) :
     SQLiteOpenHelper(context, "fudan_sync.db", null, SCHEMA_VERSION) {
 
+    init {
+        // 开启 WAL：应用内有长生命周期的 UI 连接（AppViewModel）与每轮 Worker
+        // 新建的连接并发读写；默认回滚日志下写会阻塞读，长事务可能抛
+        // "database is locked"。与桌面端 StateStore（WAL）保持同一选择。
+        setWriteAheadLoggingEnabled(true)
+    }
+
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """CREATE TABLE courses (
@@ -53,6 +60,9 @@ class DatabaseHelper(context: Context) :
                 error TEXT DEFAULT ''
             )"""
         )
+        // v3：全文索引、作业截止日期、文件级变更摘要。
+        // onCreate 与 onUpgrade 必须同步维护（v1.0.10 的「全新安装首崩」教训）。
+        createSearchTables(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -62,6 +72,7 @@ class DatabaseHelper(context: Context) :
             return
         }
         if (oldVersion < 2) migrateV1ToV2(db)
+        if (oldVersion < 3) migrateV2ToV3(db)
     }
 
     override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -74,6 +85,54 @@ class DatabaseHelper(context: Context) :
         addColumnIfMissing(db, "files", "updated_at", "TEXT DEFAULT ''")
         addColumnIfMissing(db, "sync_runs", "files_failed", "INTEGER DEFAULT 0")
         addColumnIfMissing(db, "sync_runs", "error", "TEXT DEFAULT ''")
+    }
+
+    /**
+     * v2 -> v3：新增搜索索引、作业截止日期与变更摘要表（全部是**新表**，
+     * 不动任何旧列与旧数据）。老库的已下载文件需要由同步引擎回填索引
+     * （见 SyncEngine.backfillSearchIndex）。
+     */
+    private fun migrateV2ToV3(db: SQLiteDatabase) {
+        createSearchTables(db)
+    }
+
+    private fun createSearchTables(db: SQLiteDatabase) {
+        // FTS4（而非 FTS5）：Android 各版本平台 SQLite 对 FTS5 支持不一致，
+        // FTS4 自 API 11 起普遍可用。列存 CJK 预分词文本（见 SearchIndex）。
+        runCatching {
+            db.execSQL(
+                """CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts4(
+                    filename, content, file_id UNINDEXED
+                )"""
+            )
+        }
+        // 作业截止日期（v3）：不从 files 表分离，因为作业未必有附件文件
+        runCatching {
+            db.execSQL(
+                """CREATE TABLE IF NOT EXISTS assignments (
+                    id INTEGER PRIMARY KEY,
+                    course_id INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    due_at TEXT DEFAULT '',
+                    html_url TEXT DEFAULT '',
+                    fetched_at TEXT DEFAULT ''
+                )"""
+            )
+        }
+        // 同步变更摘要（v3）：文件级 diff，通知与「最近变更」视图的来源
+        runCatching {
+            db.execSQL(
+                """CREATE TABLE IF NOT EXISTS sync_changes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER DEFAULT 0,
+                    file_id INTEGER NOT NULL,
+                    course_id INTEGER NOT NULL,
+                    filename TEXT DEFAULT '',
+                    change TEXT DEFAULT '',
+                    occurred_at TEXT DEFAULT ''
+                )"""
+            )
+        }
     }
 
     private fun addColumnIfMissing(db: SQLiteDatabase, table: String, column: String, spec: String) {
@@ -94,7 +153,13 @@ class DatabaseHelper(context: Context) :
     }
 
     companion object {
-        /** 当前 schema 版本。v2 新增 files.updated_at 与 sync_runs 的失败信息。 */
-        const val SCHEMA_VERSION = 2
+        /**
+         * 当前 schema 版本。
+         *
+         * v2 新增 files.updated_at 与 sync_runs 的失败信息；
+         * v3 新增 files_fts（搜索）、assignments（截止日期）、sync_changes（变更摘要），
+         * 全部为**新增表**，老数据不动。
+         */
+        const val SCHEMA_VERSION = 3
     }
 }

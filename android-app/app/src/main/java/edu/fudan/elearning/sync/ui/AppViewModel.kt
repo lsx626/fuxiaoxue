@@ -5,9 +5,11 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import edu.fudan.elearning.sync.auth.LoginResult
 import edu.fudan.elearning.sync.auth.UisAuthenticator
+import edu.fudan.elearning.sync.data.Assignment
 import edu.fudan.elearning.sync.data.CourseStats
 import edu.fudan.elearning.sync.data.FileItem
 import edu.fudan.elearning.sync.data.Repo
+import edu.fudan.elearning.sync.data.SearchResult
 import edu.fudan.elearning.sync.network.ApiClient
 import edu.fudan.elearning.sync.network.CanvasApi
 import edu.fudan.elearning.sync.sync.DownloadManager
@@ -18,10 +20,13 @@ import edu.fudan.elearning.sync.util.SecurePrefs
 import edu.fudan.elearning.sync.worker.Notifier
 import edu.fudan.elearning.sync.worker.SyncWorker
 import edu.fudan.elearning.sync.sync.SyncGate
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** 登录状态。 */
 sealed class LoginState {
@@ -55,6 +60,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _syncing = MutableStateFlow(false)
     val syncing: StateFlow<Boolean> = _syncing
 
+    /** 手动同步的协程句柄：退出登录时需要取消它 */
+    private var syncJob: Job? = null
+
     private val _syncProgress = MutableStateFlow("")
     val syncProgress: StateFlow<String> = _syncProgress
 
@@ -81,6 +89,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 当前选中的课程（文件列表层）。状态放在 ViewModel 而不是 Composable 里，
      *  保证打开预览离开组合后，返回时仍在原来的文件列表。 */
+    /** 待办作业（截止日期最早的 5 项；v3 起随课程统计一起刷新）。 */
+    private val _upcoming = MutableStateFlow<List<Assignment>>(emptyList())
+    val upcoming: StateFlow<List<Assignment>> = _upcoming
+
     private val _selectedCourseId = MutableStateFlow<Long?>(null)
     val selectedCourseId: StateFlow<Long?> = _selectedCourseId
 
@@ -107,12 +119,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** 启动时自动登录。 */
     private fun autoLogin() {
         val username = prefs.username
-        val password = SecurePrefs.loadPassword(getApplication())
-        if (username.isEmpty() || password.isNullOrEmpty()) {
-            _loginState.value = LoginState.LoggedOut
-            return
-        }
         viewModelScope.launch {
+            // Keystore 解密是耗时操作，不得在主线程做（AGENTS 硬性约束）
+            val password = withContext(Dispatchers.IO) {
+                SecurePrefs.loadPassword(getApplication())
+            }
+            if (username.isEmpty() || password.isNullOrEmpty()) {
+                _loginState.value = LoginState.LoggedOut
+                return@launch
+            }
             _loginState.value = LoginState.Loading
             when (val result = UisAuthenticator().login(username, password)) {
                 is LoginResult.Success -> {
@@ -164,6 +179,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 退出登录。 */
     fun logout() {
+        // 取消进行中的手动同步：否则 _syncing 滞留为 true，重登后被早退逻辑拒绝，
+        // 且旧任务结束后还会把旧课程列表写回界面
+        syncJob?.cancel()
+        syncJob = null
+        _syncing.value = false
         // 先停掉后台同步，避免退出后周期性失败并反复弹通知
         SyncWorker.cancel(getApplication())
         SecurePrefs.clear(getApplication())
@@ -186,15 +206,34 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun sync(full: Boolean = false) {
         if (_syncing.value) return
-        viewModelScope.launch {
+        syncJob = viewModelScope.launch {
             _syncing.value = true
             _syncError.value = null
             _syncProgress.value = if (full) "正在全量同步…" else "正在同步…"
-            val result = SyncGate.runOrSkip {
-                val engine = SyncEngine(getApplication(), api, repo)
-                engine.sync(full = full) { _, _, _, message ->
-                    _syncProgress.value = message
+            // 全量同步：清空「来源未启用」的记忆，让用户在 Canvas 上重新开启的
+            // 页面/作业/公告等来源有机会重新被抓取（否则会被永久跳过）。
+            if (full) {
+                prefs.clearDisabledSources()
+            }
+            val result = try {
+                SyncGate.runOrSkip {
+                    // 数据库与文件操作必须离开主线程（AGENTS 硬性约束）
+                    withContext(Dispatchers.IO) {
+                        val engine = SyncEngine(getApplication(), api, repo)
+                        engine.sync(full = full) { _, _, _, message ->
+                            _syncProgress.value = message
+                        }
+                    }
                 }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                // 兜底：SyncEngine 只处理 ApiException；SQLite/磁盘等异常抛到这里时
+                // 必须转成明确的错误状态，而不是让进程崩溃。
+                _syncing.value = false
+                _syncError.value = "同步出错：${error.message ?: error.javaClass.simpleName}"
+                _syncProgress.value = "同步失败：${_syncError.value}"
+                return@launch
             }
             _syncing.value = false
             if (result == null) {
@@ -231,12 +270,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 上次同步记录（时间与失败原因），用于设置页展示。 */
-    fun lastSyncSummary(): String {
-        val run = repo.lastRun() ?: return "尚无同步记录"
+    suspend fun lastSyncSummary(): String = withContext(Dispatchers.IO) {
+        val run = repo.lastRun() ?: return@withContext "尚无同步记录"
         val finished = run.finishedAt ?: "未完成"
         val mode = if (run.mode == "full") "全量" else "增量"
         val error = run.error
-        return if (error.isNullOrBlank()) {
+        if (error.isNullOrBlank()) {
             "${mode}同步 · $finished · 下载 ${run.filesDownloaded} 个文件"
         } else {
             "${mode}同步 · $finished · 失败：$error"
@@ -245,8 +284,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 刷新课程统计。 */
     fun refreshCourses() {
-        _courses.value = repo.courseStats()
-        bumpDataVersion()
+        // 统计查询在 IO 线程执行；StateFlow 赋值本身线程安全
+        viewModelScope.launch {
+            _courses.value = withContext(Dispatchers.IO) { repo.courseStats() }
+            // 待办作业（v3 起）：与课程统计同一次刷新，避免单独查询
+            _upcoming.value = withContext(Dispatchers.IO) { runCatching { repo.assignments(5) }.getOrDefault(emptyList()) }
+            bumpDataVersion()
+        }
     }
 
     /** 选中课程（进入文件列表）。 */
@@ -259,8 +303,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _selectedCourseId.value = null
     }
 
-    /** 获取课程文件。 */
-    fun filesOf(courseId: Long): List<FileItem> = repo.getFilesByCourse(courseId)
+    /** 获取课程文件（挂起，组合期调用安全：查询在 IO 线程执行）。 */
+    suspend fun filesOf(courseId: Long): List<FileItem> =
+        withContext(Dispatchers.IO) { repo.getFilesByCourse(courseId) }
 
     /** 更新同步频率。 */
     fun setSyncInterval(minutes: Int) {
@@ -272,35 +317,46 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 删除文件（本地 + 数据库）。 */
     fun deleteFile(file: FileItem) {
-        file.localPath.let { path ->
-            if (path.isNotEmpty()) {
-                val target = java.io.File(path)
-                target.delete()
-                // 同时清掉可能存在的断点，避免下次同步把半截文件当续传起点
-                edu.fudan.elearning.sync.sync.DownloadPlan.partFile(target).delete()
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                file.localPath.let { path ->
+                    if (path.isNotEmpty()) {
+                        val target = java.io.File(path)
+                        target.delete()
+                        // 同时清掉可能存在的断点，避免下次同步把半截文件当续传起点
+                        edu.fudan.elearning.sync.sync.DownloadPlan.partFile(target).delete()
+                    }
+                }
+                repo.deleteFile(file.fileId)
             }
+            refreshCourses()
         }
-        repo.deleteFile(file.fileId)
-        refreshCourses()
     }
 
     /** 删除课程下所有文件。 */
     fun deleteCourseFiles(courseId: Long) {
-        filesOf(courseId).forEach { file ->
-            if (file.localPath.isNotEmpty()) {
-                val target = java.io.File(file.localPath)
-                target.delete()
-                edu.fudan.elearning.sync.sync.DownloadPlan.partFile(target).delete()
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                filesOf(courseId).forEach { file ->
+                    if (file.localPath.isNotEmpty()) {
+                        val target = java.io.File(file.localPath)
+                        target.delete()
+                        edu.fudan.elearning.sync.sync.DownloadPlan.partFile(target).delete()
+                    }
+                }
+                repo.deleteFilesByCourse(courseId)
             }
+            refreshCourses()
         }
-        repo.deleteFilesByCourse(courseId)
-        refreshCourses()
     }
 
     /**
      * 重试单个失败文件（不触发整轮同步）。
      *
      * 只需要该文件自己的下载 URL 与大小，失败时保留断点，下次可继续续传。
+     * 注意：Canvas 的下载 URL 带 verifier 且会过期，数据库里存的是抓取时的
+     * 地址；遇 404/403 时必须像 SyncEngine 那样重新换取签名 URL 再试一次，
+     * 否则重试永远失败。
      */
     fun retryFile(file: FileItem) {
         if (file.url.isEmpty()) {
@@ -308,36 +364,56 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         viewModelScope.launch {
-            val context = getApplication<android.app.Application>()
-            val downloader = edu.fudan.elearning.sync.sync.DownloadManager(context)
-            val courseDir = downloader.courseDir(repo.courseName(file.courseId))
-            val taken = repo.getFilesByCourse(file.courseId)
-                .filter { it.fileId != file.fileId && it.localPath.isNotEmpty() }
-                .map { java.io.File(it.localPath).name }
-                .toSet()
-            val dest = file.localPath.takeIf { it.isNotEmpty() }?.let { java.io.File(it) }
-                ?: downloader.destinationFor(
-                    courseDir,
-                    file.filename.ifEmpty {
-                        edu.fudan.elearning.sync.sync.DownloadManager.sanitize(file.name)
-                    },
-                    taken
-                )
-            when (val outcome = downloader.download(file.url, dest, file.size)) {
+            val outcome = withContext(Dispatchers.IO) {
+                val context = getApplication<android.app.Application>()
+                val downloader = edu.fudan.elearning.sync.sync.DownloadManager(context)
+                val courseDir = downloader.courseDir(repo.courseName(file.courseId))
+                val taken = repo.getFilesByCourse(file.courseId)
+                    .filter { it.fileId != file.fileId && it.localPath.isNotEmpty() }
+                    .map { java.io.File(it.localPath).name }
+                    .toSet()
+                val dest = file.localPath.takeIf { it.isNotEmpty() }?.let { java.io.File(it) }
+                    ?: downloader.destinationFor(
+                        courseDir,
+                        file.filename.ifEmpty {
+                            edu.fudan.elearning.sync.sync.DownloadManager.sanitize(file.name)
+                        },
+                        taken
+                    )
+                var result = downloader.download(file.url, dest, file.size)
+                if (result is edu.fudan.elearning.sync.sync.DownloadOutcome.Failed &&
+                    (result.reason.contains("404") || result.reason.contains("403"))
+                ) {
+                    // 签名 URL 已过期：重新向 API 换取，再试一次
+                    val freshUrl = runCatching {
+                        api.getFile(file.courseId, file.fileId)?.url
+                    }.getOrNull()?.takeIf { it.isNotEmpty() && it != file.url }
+                    if (freshUrl != null) {
+                        result = downloader.download(freshUrl, dest, file.size)
+                    }
+                }
+                result to dest
+            }
+            when (val result = outcome.first) {
                 is edu.fudan.elearning.sync.sync.DownloadOutcome.Success -> {
-                    repo.upsertFile(
-                        file.copy(
-                            localPath = outcome.path.absolutePath,
-                            size = outcome.bytes,
+                    withContext(Dispatchers.IO) {
+                        val updated = file.copy(
+                            localPath = result.path.absolutePath,
+                            size = result.bytes,
                             status = "downloaded",
                             downloadedAt = now()
                         )
-                    )
+                        repo.upsertFile(updated)
+                        // 重试成功也要刷新搜索索引（旧索引可能是文件名兜底）
+                        edu.fudan.elearning.sync.search.SearchIndexer.indexFile(
+                            getApplication(), repo, updated
+                        )
+                    }
                     toast("已重新下载：${file.name}")
                 }
                 is edu.fudan.elearning.sync.sync.DownloadOutcome.Failed -> {
-                    repo.markFailed(file.fileId)
-                    toast("重试失败：${outcome.reason}")
+                    withContext(Dispatchers.IO) { repo.markFailed(file.fileId) }
+                    toast("重试失败：${result.reason}")
                 }
             }
             refreshCourses()
@@ -347,6 +423,68 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private fun now(): String = java.text.SimpleDateFormat(
         "yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()
     ).format(java.util.Date())
+
+    // ---------- 搜索（v3 起） ----------
+    private val _searchOpen = MutableStateFlow(false)
+    val searchOpen: StateFlow<Boolean> = _searchOpen
+
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery
+
+    private val _searchResults = MutableStateFlow<List<SearchResult>>(emptyList())
+    val searchResults: StateFlow<List<SearchResult>> = _searchResults
+
+    private val _searching = MutableStateFlow(false)
+    val searching: StateFlow<Boolean> = _searching
+
+    private var searchJob: kotlinx.coroutines.Job? = null
+
+    fun openSearch() {
+        _searchOpen.value = true
+    }
+
+    fun closeSearch() {
+        _searchOpen.value = false
+        _searchQuery.value = ""
+        _searchResults.value = emptyList()
+        searchJob?.cancel()
+    }
+
+    /**
+     * 更新搜索关键字（防抖 250ms 后执行查询）。
+     *
+     * 查询在 IO 线程执行：FTS 搜索不访问网络，只读本地库。
+     */
+    fun updateSearchQuery(query: String) {
+        _searchQuery.value = query
+        searchJob?.cancel()
+        if (query.isBlank()) {
+            _searchResults.value = emptyList()
+            return
+        }
+        searchJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(250)
+            _searching.value = true
+            try {
+                val results = withContext(Dispatchers.IO) {
+                    runCatching { repo.searchFiles(query) }.getOrDefault(emptyList())
+                }
+                _searchResults.value = results
+            } finally {
+                _searching.value = false
+            }
+        }
+    }
+
+    /** 搜索结果点击：直接打开应用内预览，并关闭搜索页。 */
+    fun openSearchResult(result: SearchResult) {
+        val file = repo.getFile(result.fileId) ?: run {
+            toast("该文件记录已不存在")
+            return
+        }
+        closeSearch()
+        openPreview(file)
+    }
 
     /** 打开应用内预览（取代旧的 ACTION_VIEW 跳转）。 */
     fun openPreview(file: FileItem) {

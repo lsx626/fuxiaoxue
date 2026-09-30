@@ -100,6 +100,10 @@ class Downloader:
     def stop(self) -> None:
         self._stop.set()
 
+    def is_stopped(self) -> bool:
+        """供引擎在长流程中协作检查（不再让调用方读 `_stop` 私有字段）。"""
+        return self._stop.is_set()
+
     @property
     def total_bytes(self) -> int:
         return self._total_bytes

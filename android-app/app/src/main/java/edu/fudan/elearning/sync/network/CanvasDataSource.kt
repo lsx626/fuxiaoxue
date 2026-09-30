@@ -43,12 +43,14 @@ data class CanvasAttachment(
     @SerializedName("content-type") val contentType: String = ""
 )
 
-/** Canvas 作业。 */
+/** Canvas 作业。`due_at` 是 Canvas 返回的截止时间（ISO8601，可能为空）。 */
 data class CanvasAssignment(
     val id: Long = 0,
     val name: String = "",
     val description: String? = null,
-    val attachments: List<CanvasAttachment> = emptyList()
+    val attachments: List<CanvasAttachment> = emptyList(),
+    @SerializedName("due_at") val dueAt: String? = null,
+    @SerializedName("html_url") val htmlUrl: String? = null
 )
 
 /** Canvas 公告。 */

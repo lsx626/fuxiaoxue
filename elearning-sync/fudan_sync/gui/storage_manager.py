@@ -670,10 +670,9 @@ class StorageManagerDialog(QDialog):
                     # 删除失败也继续尝试删除数据库记录
                     pass
 
-            # 从数据库删除记录
+            # 从数据库删除记录（同时清搜索索引）
             try:
-                with self.store._write_lock_cursor() as cur:  # pylint: disable=protected-access
-                    cur.execute("DELETE FROM files WHERE file_id=?", (file_id,))
+                self.store.delete_file(file_id)
                 deleted_count += 1
             except Exception:  # pylint: disable=broad-except
                 pass

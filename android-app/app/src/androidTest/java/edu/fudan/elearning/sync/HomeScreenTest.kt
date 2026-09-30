@@ -84,8 +84,13 @@ class HomeScreenTest {
         vm = AppViewModel(ctx as Application)
         // 登录态没有公开 setter（真实路径是走 UIS 登录），这里只能反射注入；
         // 公开字段与私有 backing flow 都要替换，界面读公开字段、内部派生读私有流。
+        //
+        // 两个字段必须注入**不同**对象：init 里启动的 autoLogin() 协程会异步写
+        // `_loginState`（最终是 LoggedOut）。若注入同一个对象，LoggedOut 会
+        // 覆盖 LoggedIn，设置页的用户名变成空串。让内部写入落在一个一次性
+        // flow 上，组合读的 LoggedIn flow 没人再写，竞态即消除。
         val login = MutableStateFlow<LoginState>(LoginState.LoggedIn("20260001"))
-        setField(vm, "_loginState", login)
+        setField(vm, "_loginState", MutableStateFlow(LoginState.LoggedOut))
         setField(vm, "loginState", login)
         // 课程数据走**真实路径**（refreshCourses 从 SQLite 读演示数据），
         // 不再反射替换：否则 ViewModel 内部在 init 时派生的 selectedCourse

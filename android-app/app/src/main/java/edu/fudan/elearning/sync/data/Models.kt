@@ -45,3 +45,41 @@ data class CourseStats(
     val filesDone: Int,
     val bytesDownloaded: Long
 )
+
+/** 搜索结果（跨课程的本地全文搜索，见 Repo.searchFiles） */
+data class SearchResult(
+    val fileId: Long,
+    val courseId: Long,
+    val name: String,
+    val filename: String = "",
+    val size: Long = 0,
+    val status: String = "",
+    val localPath: String = "",
+    val courseName: String = "",
+    /** FTS4 snippet 命中摘要（无命中时为空）。 */
+    val snippet: String = ""
+)
+
+/** 作业（带截止日期；同步时从 Canvas assignments 采集） */
+data class Assignment(
+    val id: Long,
+    val courseId: Long,
+    val name: String,
+    /** Canvas `due_at`（ISO8601 或空字符串）。 */
+    val dueAt: String = "",
+    val htmlUrl: String = ""
+)
+
+/** 文件级变更摘要（sync_changes 表的一行） */
+data class FileChange(
+    val id: Long = 0,
+    val runId: Long = 0,
+    val fileId: Long,
+    val courseId: Long,
+    val filename: String = "",
+    /** new / updated / removed */
+    val change: String = "",
+    val occurredAt: String = "",
+    /** 课程名（LEFT JOIN courses；课程记录缺失时为空）。 */
+    val courseName: String = ""
+)

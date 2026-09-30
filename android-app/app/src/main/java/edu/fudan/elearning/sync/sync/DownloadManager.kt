@@ -131,7 +131,9 @@ class DownloadManager(
 
             try {
                 body.byteStream().use { input ->
-                    part.outputStream().use { out ->
+                    // 续传时必须以追加模式打开（File.outputStream() 会截断已有字节），
+                    // 否则 206 返回的尾部片段会覆盖掉已下载的头部，文件就此损坏。
+                    DownloadPlan.partOutputStream(part, append).use { out ->
                         val buffer = ByteArray(64 * 1024)
                         while (true) {
                             val read = input.read(buffer)
@@ -149,7 +151,9 @@ class DownloadManager(
                 return DownloadOutcome.Failed("网络中断：${error.message ?: error.javaClass.simpleName}")
             }
 
-            if (DownloadPlan.looksLikeLoginPage(contentType, head.toString(Charsets.UTF_8))) {
+            // 注意：ByteArrayOutputStream.toString(Charset) 是 JVM 10/Android API 33 的重载，
+            // minSdk 26 不可用；ByteArray.toByteArray().toString(Charset) 是 Kotlin stdlib，全 API 安全。
+            if (DownloadPlan.looksLikeLoginPage(contentType, head.toByteArray().toString(Charsets.UTF_8))) {
                 part.delete()
                 return DownloadOutcome.Failed("下载被重定向到登录页，会话已失效", retryable = false)
             }

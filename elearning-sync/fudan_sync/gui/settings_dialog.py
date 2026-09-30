@@ -209,8 +209,12 @@ class SettingsDialog(QFrame):
         exts = [e.strip().lower().lstrip(".") for e in self.exts_edit.text().split(",") if e.strip()]
 
         try:
+            # 注意：键路径必须是单元素元组 ("root_dir",)。若误传字符串 "root_dir"，
+            # update_config 会逐字符迭代它，把根目录写进
+            # r:{o:{o:{t:{_:{d:{i:{r: …}}}}}}} 这样的垃圾嵌套键，
+            # 用户改的同步目录则永远不生效。
             update_config(self.config_path, [
-                ("root_dir", os.path.expanduser(root)),
+                (("root_dir",), os.path.expanduser(root)),
                 (("sync", "interval_minutes"), int(self.interval_spin.value())),
                 (("sync", "only_favorites"), bool(self.only_favorites_check.isChecked())),
                 (("sync", "archive_pages"), bool(self.archive_check.isChecked())),

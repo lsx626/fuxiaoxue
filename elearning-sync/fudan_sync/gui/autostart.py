@@ -9,12 +9,18 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
 def _startup_target() -> str:
-    """自启时执行的命令行。"""
+    """自启时执行的命令行。
+
+    Windows Run 键的值作为 CreateProcess 的 lpCommandLine执行：其中的
+    可执行路径只能包**一层**引号。旧实现在源码运行模式下把
+    `'"python.exe" "gui.py"'` 整体再包一层引号，得到
+    `""python.exe" "gui.py"" --minimized`，CreateProcess 以
+    ERROR_INVALID_PARAMETER(87) 拒绝启动，开机自启完全失效。
+    """
     if getattr(sys, "frozen", False):
-        exe = sys.executable
-    else:
-        exe = f'"{sys.executable}" "{os.path.join(_project_root(), "gui.py")}"'
-    return f'"{exe}" --minimized'
+        return f'"{sys.executable}" --minimized'
+    gui_py = os.path.join(_project_root(), "gui.py")
+    return f'"{sys.executable}" "{gui_py}" --minimized'
 
 
 def _project_root() -> str:

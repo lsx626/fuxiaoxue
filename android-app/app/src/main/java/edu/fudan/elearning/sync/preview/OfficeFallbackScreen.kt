@@ -103,6 +103,9 @@ private const val MAX_CHARS = 200_000
 /**
  * 从 OOXML/ODF（本质是 zip）中按条目抽取纯文本：
  * 命中目标条目前缀时，剥离 XML 标签保留可见文字。
+ *
+ * 安全约束：每个条目最多读 [MAX_CHARS] 个字符就停止（XML 标签剥离后最多
+ * MAX_CHARS），避免「zip 炸弹」式的超大条目把整段内容读进内存导致 OOM。
  */
 private fun extractText(file: File, targets: Set<String>): String? {
     return try {
@@ -112,11 +115,12 @@ private fun extractText(file: File, targets: Set<String>): String? {
             while (entry != null) {
                 val name = entry.name
                 if (targets.any { name.startsWith(it) } && name.endsWith(".xml")) {
-                    val raw = zis.bufferedReader(Charsets.UTF_8).readText()
+                    // 限量读取：单个条目再大也最多读 MAX_CHARS 字符
+                    val raw = readBounded(zis, MAX_CHARS)
                     val text = stripXml(raw)
                     if (text.isNotBlank()) {
                         if (builder.isNotEmpty()) builder.append("\n\n")
-                        builder.append(text)
+                        builder.append(text.take(MAX_CHARS))
                     }
                 }
                 zis.closeEntry()
@@ -127,6 +131,19 @@ private fun extractText(file: File, targets: Set<String>): String? {
     } catch (e: Exception) {
         null
     }
+}
+
+/** 从流中最多读 [maxChars] 个 UTF-8 字符（到上限即停，不把超大条目全读进内存）。 */
+private fun readBounded(stream: java.io.InputStream, maxChars: Int): String {
+    val reader = stream.bufferedReader(Charsets.UTF_8)
+    val builder = StringBuilder()
+    val buffer = CharArray(8192)
+    while (builder.length < maxChars) {
+        val read = reader.read(buffer)
+        if (read <= 0) break
+        builder.append(buffer, 0, minOf(read, maxChars - builder.length))
+    }
+    return builder.toString()
 }
 
 /** 剥离 XML 标签，把 <w:p>/<a:p>/<w:br/> 等转成换行，保留可读文字。 */

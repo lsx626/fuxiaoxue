@@ -131,19 +131,29 @@ object SlideExtractor {
      * 幻灯片通常只放内容，背景装饰（校徽、色带、装饰线、页脚图形）都在版式/母版里；
      * 不渲染它们页面就会「缺组件」。占位符必须跳过：版式占位符里是提示文字，
      * 真正内容在幻灯片上，重复绘制会出现重影。
+     *
+     * pptx（XSLF）与 ppt（HSLF）都要覆盖：旧实现只处理 XSLFSlide，.ppt 文档的
+     * 母版装饰会被整体丢弃。HSLF 的 layout 概念由 HSLFMasterSheet 承载
+     * （`getSlideLayout()` 在 HSLF 上返回的同样是 MasterSheet）。
      */
     private fun backgroundShapes(slide: Slide<*, *>): List<Any> = runCatching {
-        val xslf = slide as? org.apache.poi.xslf.usermodel.XSLFSlide
-            ?: return emptyList<Any>()
         val out = mutableListOf<Any>()
-        runCatching {
-            xslf.masterSheet?.shapes?.forEach { shape ->
-                if ((shape as? SimpleShape<*, *>)?.placeholder == null) out += shape
-            }
+        val masters: List<org.apache.poi.sl.usermodel.MasterSheet<*, *>> = when (slide) {
+            is org.apache.poi.xslf.usermodel.XSLFSlide -> listOfNotNull(
+                slide.masterSheet,
+                slide.slideLayout
+            )
+            is org.apache.poi.hslf.usermodel.HSLFSlide -> listOfNotNull(
+                slide.masterSheet,
+                slide.slideLayout
+            )
+            else -> return emptyList<Any>()
         }
-        runCatching {
-            xslf.slideLayout?.shapes?.forEach { shape ->
-                if ((shape as? SimpleShape<*, *>)?.placeholder == null) out += shape
+        masters.forEach { master ->
+            runCatching {
+                master.shapes?.forEach { shape ->
+                    if ((shape as? SimpleShape<*, *>)?.placeholder == null) out += shape
+                }
             }
         }
         out

@@ -34,19 +34,25 @@ fun PdfPreviewScreen(file: File) {
 
     LaunchedEffect(file.absolutePath) {
         withContext(Dispatchers.IO) {
-            runCatching {
-                val pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+            var pfd: ParcelFileDescriptor? = null
+            try {
+                pfd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
                 val renderer = PdfRenderer(pfd)
                 if (renderer.pageCount <= 0) {
                     runCatching { renderer.close() }
                     runCatching { pfd.close() }
                     loadState = PdfLoadState.Error("该 PDF 没有可显示的页面")
-                    return@runCatching
+                    return@withContext
                 }
                 source = PdfPageSource(pfd, renderer)
                 loadState = PdfLoadState.Ready(renderer.pageCount)
-            }.onFailure {
-                loadState = PdfLoadState.Error("无法打开 PDF：${it.message ?: "文件可能已损坏"}")
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                // 离开预览的取消必须原样抛出，绝不能当成「解析失败」
+                throw cancelled
+            } catch (error: Throwable) {
+                // PdfRenderer 构造失败时 pfd 必须关闭，否则文件描述符泄漏
+                runCatching { pfd?.close() }
+                loadState = PdfLoadState.Error("无法打开 PDF：${error.message ?: "文件可能已损坏"}")
             }
         }
     }
@@ -95,12 +101,16 @@ private class PdfPageSource(
 
     fun aspectOf(index: Int): Float {
         aspects[index]?.let { return it }
-        val a = runCatching {
-            renderer.openPage(index).use { p ->
-                if (p.width <= 0 || p.height <= 0) DEFAULT_ASPECT
-                else p.width.toFloat() / p.height.toFloat()
-            }
-        }.getOrDefault(DEFAULT_ASPECT)
+        // aspectOf 在主线程调用、renderPage 在 IO 线程调用；PdfRenderer 的
+        // openPage 并非线程安全，用同一把锁串行化，避免原生层竞态崩溃
+        val a = synchronized(renderer) {
+            runCatching {
+                renderer.openPage(index).use { p ->
+                    if (p.width <= 0 || p.height <= 0) DEFAULT_ASPECT
+                    else p.width.toFloat() / p.height.toFloat()
+                }
+            }.getOrDefault(DEFAULT_ASPECT)
+        }
         aspects[index] = a
         return a
     }
@@ -108,13 +118,15 @@ private class PdfPageSource(
     /** 以 2 倍清晰度渲染单页；长边上限 [MAX_PAGE_DIMEN]，防止位图过大 OOM。 */
     fun renderPage(index: Int): Bitmap? = runCatching {
         if (index < 0 || index >= renderer.pageCount) return null
-        renderer.openPage(index).use { page ->
-            val width = (page.width * RENDER_SCALE).coerceAtMost(MAX_PAGE_DIMEN).coerceAtLeast(1)
-            val height = (page.height * RENDER_SCALE).coerceAtMost(MAX_PAGE_DIMEN).coerceAtLeast(1)
-            val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            Canvas(bmp).drawColor(Color.WHITE)
-            page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-            bmp
+        synchronized(renderer) {
+            renderer.openPage(index).use { page ->
+                val width = (page.width * RENDER_SCALE).coerceAtMost(MAX_PAGE_DIMEN).coerceAtLeast(1)
+                val height = (page.height * RENDER_SCALE).coerceAtMost(MAX_PAGE_DIMEN).coerceAtLeast(1)
+                val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                Canvas(bmp).drawColor(Color.WHITE)
+                page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                bmp
+            }
         }
     }.getOrNull()
 

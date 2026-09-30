@@ -9,17 +9,19 @@ from weakref import ref
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import (QAction, QColor, QFont, QFontMetrics, QGuiApplication,
-                           QTextCursor)
+                           QKeySequence, QShortcut, QTextCursor)
 from PySide6.QtWidgets import (QAbstractItemView, QFrame,
                                QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-                               QMainWindow, QMenu, QMessageBox, QProgressBar,
-                               QPushButton, QSplitter, QStatusBar, QTableWidget,
-                               QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
+                               QLineEdit, QMainWindow, QMenu, QMessageBox,
+                               QProgressBar, QPushButton, QSplitter, QStatusBar,
+                               QTableWidget, QTableWidgetItem, QTextEdit,
+                               QVBoxLayout, QWidget,
                                QSizePolicy)
 
 from .. import __version__
 from ..auth import AuthError
 from ..config import load_config
+from ..search_index import filter_file_records
 from ..state import StateStore
 from ..utils import format_size, sanitize_path_component
 from .config_io import load_gui_state, save_gui_state
@@ -27,6 +29,9 @@ from .icon import app_icon
 from .login_window import LoginWindow
 from .notifier import WindowsNotifier
 from .previewer import DocumentPreviewDialog
+from .search_dialog import SearchDialog
+from .deadlines_dialog import DeadlinesDialog
+from .recent_changes_dialog import RecentChangesDialog
 from .settings_dialog import SettingsDialog
 from .sharing import show_share_menu
 from .storage_manager import StorageManagerDialog
@@ -126,6 +131,8 @@ class MainWindow(QMainWindow):
         self._quitting = False
         self._quit_pending = False
         self._current_file_course_id: Optional[int] = None  # 当前展开文件列表的课程 ID
+        self._current_course_files: list = []  # 当前课程的全量文件记录（过滤前）
+        self.search_dialog: Optional[SearchDialog] = None
 
         self.setObjectName("root")
         self.setWindowTitle(f"复小学 v{__version__}")
@@ -168,6 +175,11 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         self.setStatusBar(self._build_status_bar())
 
+        self._shortcut_search = QShortcut(QKeySequence("Ctrl+K"), self)
+        self._shortcut_search.activated.connect(self._open_search)
+        self._shortcut_filter = QShortcut(QKeySequence("Ctrl+F"), self)
+        self._shortcut_filter.activated.connect(self._focus_file_filter)
+
     def _build_header(self) -> QWidget:
         header = QFrame()
         header_layout = QHBoxLayout(header)
@@ -202,7 +214,10 @@ class MainWindow(QMainWindow):
             f"padding: 5px 12px; color: {TEXT_SECONDARY};")
         header_layout.addWidget(self.user_chip)
 
-        for text, handler in (("打开同步目录", self._open_root_dir),
+        for text, handler in (("搜索", self._open_search),
+                              ("截止日期", self._open_deadlines),
+                              ("最近变更", self._open_recent_changes),
+                              ("打开同步目录", self._open_root_dir),
                               ("存储管理", self._open_storage_manager),
                               ("设置", self._open_settings),
                               ("日志", self._toggle_log_panel)):
@@ -362,6 +377,14 @@ class MainWindow(QMainWindow):
             header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
         course_layout.addWidget(self.course_table)
 
+        self.course_empty_label = QLabel(
+            "暂无课程。登录并点击「立即同步」开始同步课程文件。")
+        self.course_empty_label.setObjectName("hint")
+        self.course_empty_label.setAlignment(Qt.AlignCenter)
+        self.course_empty_label.setStyleSheet("padding: 28px;")
+        self.course_empty_label.setVisible(False)
+        course_layout.addWidget(self.course_empty_label)
+
         self.course_splitter.addWidget(course_panel)
 
         # 下半：文件列表（默认隐藏/折叠）
@@ -376,6 +399,16 @@ class MainWindow(QMainWindow):
         self.file_panel_title.setObjectName("cardTitle")
         file_header_row.addWidget(self.file_panel_title)
         file_header_row.addStretch()
+        self.file_filter_edit = QLineEdit()
+        self.file_filter_edit.setPlaceholderText("过滤本课程文件…（Ctrl+F）")
+        self.file_filter_edit.setClearButtonEnabled(True)
+        self.file_filter_edit.setMaximumWidth(220)
+        self.file_filter_edit.setMinimumHeight(30)
+        self.file_filter_edit.setStyleSheet(
+            f"QLineEdit {{ background: {CARD}; border: 1px solid #E2E7F1;"
+            f" border-radius: 8px; padding: 4px 10px; color: {TEXT}; }}")
+        self.file_filter_edit.textChanged.connect(self._apply_file_filter)
+        file_header_row.addWidget(self.file_filter_edit)
         self.file_count_label = QLabel("")
         self.file_count_label.setObjectName("hint")
         file_header_row.addWidget(self.file_count_label)
@@ -398,6 +431,13 @@ class MainWindow(QMainWindow):
         for column in range(1, 4):
             file_header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
         file_layout.addWidget(self.file_table)
+
+        self.file_empty_label = QLabel("该课程还没有同步任何文件。")
+        self.file_empty_label.setObjectName("hint")
+        self.file_empty_label.setAlignment(Qt.AlignCenter)
+        self.file_empty_label.setStyleSheet("padding: 28px;")
+        self.file_empty_label.setVisible(False)
+        file_layout.addWidget(self.file_empty_label)
 
         self.course_splitter.addWidget(self.file_panel)
         self.course_splitter.setStretchFactor(0, 3)
@@ -511,9 +551,23 @@ class MainWindow(QMainWindow):
     def _on_login_ok(self, user: dict) -> None:
         self.user = user
         self.user_chip.setText(f"👤 {user.get('name') or user.get('username', '')}")
-        # 从未同步过的用户，打开后直接开始首次同步
-        if not os.path.exists(self.cfg.state_db):
-            self._start_sync(full=False)
+        # 从未同步过的用户，打开后直接开始首次同步。
+        # 注意：不能用 state_db 文件是否存在判断——主窗口 __init__ 调
+        # _refresh_stats() 构造 StateStore 时就会把库建出来；要用
+        # 「是否有过同步记录」判断。
+        try:
+            state = StateStore(self.cfg.state_db)
+        except Exception:  # pylint: disable=broad-except
+            state = None
+        if state is not None:
+            try:
+                never_synced = state.last_run() is None
+            except Exception:  # pylint: disable=broad-except
+                never_synced = False
+            finally:
+                state.close()
+            if never_synced:
+                self._start_sync(full=False)
 
     def _on_login_failed(self, message: str) -> None:
         self.user_chip.setText("未登录")
@@ -625,9 +679,10 @@ class MainWindow(QMainWindow):
         bytes_downloaded = stats.get("bytes_downloaded", 0)
         if downloaded:
             # Windows 桌面通知（点击可打开同步目录）；托盘提示作为无通知组件时的兜底
+            # v1.1.0 起：按课程列出文件名（变更摘要），不再只给一个计数
             self.notifier.notify(
                 "同步完成",
-                f"新增 {downloaded} 个文件，共 {format_size(bytes_downloaded)}",
+                self._format_sync_notice(downloaded, bytes_downloaded),
                 open_path=self.cfg.root_dir,
             )
         self._refresh_stats()
@@ -723,6 +778,7 @@ class MainWindow(QMainWindow):
             self._set_table_item(row, 6, str(course.get("id")))
         self.course_count_label.setText(
             f"共 {len(courses)} 门课程 · {format_size(stats.get('bytes', 0) or 0)}")
+        self.course_empty_label.setVisible(not courses)
 
     def _set_table_item(self, row: int, column: int, text: str,
                         bold: bool = False, align_right: bool = False) -> None:
@@ -786,8 +842,31 @@ class MainWindow(QMainWindow):
             state.close()
 
         self.file_panel_title.setText(f"{course_name} · 文件列表")
-        self.file_count_label.setText(f"共 {len(files)} 个文件")
+        self._current_course_files = files
+        self._apply_file_filter(self.file_filter_edit.text())
 
+    def _apply_file_filter(self, query: str) -> None:
+        """按关键字过滤当前课程文件列表（纯函数过滤，不改底层数据）。"""
+        files = getattr(self, "_current_course_files", []) or []
+        filtered = filter_file_records(files, query or "")
+        self._render_file_rows(filtered)
+        total = len(files)
+        shown = len(filtered)
+        if query.strip():
+            self.file_count_label.setText(
+                f"共 {total} 个文件 · 命中 {shown} 项" if total else "暂无文件")
+        else:
+            self.file_count_label.setText(f"共 {total} 个文件")
+        if not files:
+            self.file_empty_label.setText("该课程还没有同步任何文件。")
+            self.file_empty_label.setVisible(True)
+        elif not filtered:
+            self.file_empty_label.setText("没有匹配当前关键字的文件。")
+            self.file_empty_label.setVisible(True)
+        else:
+            self.file_empty_label.setVisible(False)
+
+    def _render_file_rows(self, files) -> None:
         self.file_table.setRowCount(len(files))
         for row, file_info in enumerate(files):
             name = file_info.get("display_name") or file_info.get("filename", "未知文件")
@@ -846,6 +925,12 @@ class MainWindow(QMainWindow):
         file_path = self._selected_file_path()
         if not file_path:
             return
+        self._open_preview_for_path(file_path)
+
+    def _open_preview_for_path(self, file_path: str) -> None:
+        """打开预览对话框（文件列表与搜索结果共用入口）。"""
+        if not file_path or not os.path.exists(file_path):
+            return
         if self.preview_dialog is not None and self.preview_dialog.isVisible():
             self.preview_dialog.close()
         dialog = DocumentPreviewDialog(file_path, parent=self)
@@ -868,6 +953,102 @@ class MainWindow(QMainWindow):
         """
         if self.preview_dialog is dialog:
             self.preview_dialog = None
+
+    # ==================================================================
+    # 搜索
+    # ==================================================================
+    def _open_search(self) -> None:
+        """Ctrl+K / 「搜索」按钮：跨课程搜索已下载的本地文件。"""
+        if self.search_dialog is not None and self.search_dialog.isVisible():
+            self.search_dialog.raise_()
+            self.search_dialog.activateWindow()
+            return
+        self.search_dialog = SearchDialog(self.cfg.state_db, parent=self)
+        # WA_DeleteOnClose + destroyed 清引用（与设置页同一模式）
+        self.search_dialog.file_open_requested.connect(self._open_file_from_search)
+        self.search_dialog.destroyed.connect(self._clear_search_dialog)
+        self.search_dialog.show()
+
+    def _clear_search_dialog(self) -> None:
+        self.search_dialog = None
+
+    def _focus_file_filter(self) -> None:
+        """Ctrl+F：文件面板可见时聚焦过滤框，否则打开全局搜索。"""
+        if getattr(self, "_file_panel_visible", False) and self.file_panel.isVisible():
+            self.file_filter_edit.setFocus()
+            self.file_filter_edit.selectAll()
+        else:
+            self._open_search()
+
+    def _select_course_row(self, course_id: int) -> None:
+        for row in range(self.course_table.rowCount()):
+            item = self.course_table.item(row, 6)
+            if item is not None and item.text() == str(course_id):
+                self.course_table.selectRow(row)
+                return
+
+    def _open_file_from_search(self, file_id: int) -> None:
+        """搜索结果定位：选中课程行、展开文件列表，并直接预览。"""
+        try:
+            state = StateStore(self.cfg.state_db)
+        except Exception:  # pylint: disable=broad-except
+            return
+        try:
+            record = state.get_file(file_id)
+        finally:
+            state.close()
+        if not record:
+            QMessageBox.information(self, "搜索", "该文件记录已不存在。")
+            return
+        course_id = record.get("course_id")
+        if course_id is not None:
+            self._current_file_course_id = course_id
+            self._select_course_row(course_id)
+            self._populate_file_list(course_id)
+            self.file_panel.setVisible(True)
+            self._file_panel_visible = True
+        path = record.get("local_path") or ""
+        if path and os.path.exists(path):
+            self._open_preview_for_path(path)
+        else:
+            QMessageBox.information(
+                self, "搜索", "文件在本地不存在，可能尚未下载或已被移除。")
+
+    def _format_sync_notice(self, downloaded: int, total_bytes: int) -> str:
+        """把本轮新增/更新整理成「课程：文件名…」的摘要，取代裸计数。"""
+        try:
+            state = StateStore(self.cfg.state_db)
+        except Exception:  # pylint: disable=broad-except
+            return f"新增 {downloaded} 个文件，共 {format_size(total_bytes)}"
+        try:
+            changes = state.recent_changes(limit=max(downloaded, 12))
+        except Exception:  # pylint: disable=broad-except
+            changes = []
+        finally:
+            state.close()
+        if not changes:
+            return f"新增 {downloaded} 个文件，共 {format_size(total_bytes)}"
+        grouped = {}
+        for item in changes:
+            course = item.get("course_name") or f"课程 {item.get('course_id')}"
+            grouped.setdefault(course, []).append(item.get("filename") or "未知文件")
+        lines = []
+        for course, names in list(grouped.items())[:3]:
+            shown = "、".join(names[:3])
+            if len(names) > 3:
+                shown += f" 等 {len(names)} 个"
+            lines.append(f"{course}：{shown}")
+        if len(grouped) > 3:
+            lines.append(f"其余 {len(grouped) - 3} 门课程…")
+        return "\n".join(lines) + f"\n共 {format_size(total_bytes)}"
+
+    def _open_deadlines(self) -> None:
+        """打开作业截止日期对话框（带 .ics 导出）。"""
+        DeadlinesDialog(self.cfg.state_db, parent=self).show()
+
+    def _open_recent_changes(self) -> None:
+        """打开最近变更对话框（文件级同步 diff）。"""
+        RecentChangesDialog(self.cfg.state_db, parent=self).show()
 
     def _file_context_menu(self, position) -> None:
         """文件列表右键菜单：预览文件、分享文件、打开课程目录。"""
@@ -911,6 +1092,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "存储管理", f"无法打开状态库：{exc}")
             return
         self.storage_dialog = StorageManagerDialog(state, parent=self)
+        # 关闭即删除：常驻托盘的应用反复打开存储管理会累积整棵隐藏窗口树
+        self.storage_dialog.setAttribute(Qt.WA_DeleteOnClose, True)
         self.storage_dialog.files_deleted.connect(self._on_storage_files_deleted)
         self.storage_dialog.finished.connect(lambda _: self._on_storage_closed(state))
         self.storage_dialog.show()
@@ -1002,9 +1185,17 @@ class MainWindow(QMainWindow):
             self.settings_dialog.activateWindow()
             return
         self.settings_dialog = SettingsDialog(self.cfg, self.config_path, parent=self)
+        # 关闭即删除（与预览对话框同一模式），避免反复打开累积隐藏窗口树
+        self.settings_dialog.setAttribute(Qt.WA_DeleteOnClose, True)
         self.settings_dialog.applied.connect(self._on_settings_applied)
         self.settings_dialog.logout_requested.connect(self._on_logout)
+        # SettingsDialog 是 QFrame（没有 QDialog::finished），用 destroyed 在
+        # C++ 对象删除时清掉 Python 引用，防止后续误用到已删除对象
+        self.settings_dialog.destroyed.connect(self._clear_settings_dialog)
         self.settings_dialog.show()
+
+    def _clear_settings_dialog(self) -> None:
+        self.settings_dialog = None
 
     def _on_settings_applied(self) -> None:
         self.cfg = load_config(self.config_path)
@@ -1062,31 +1253,55 @@ class MainWindow(QMainWindow):
 
     def _quit(self) -> None:
         """
-        退出：先请同步线程协作停止，停不下来就稍后重试，绝不强杀线程。
+        退出：先请所有后台线程协作停止，停不下来就稍后重试，绝不强杀线程。
 
-        历史实现只等 5 秒就继续销毁窗口，仍在运行的 QThread 会触发
-        “QThread: Destroyed while thread is still running” 并在退出时崩溃。
-        这里改为把退出延后，直到线程真正结束（同步请求有超时上限，不会无限等）。
+        历史实现只等同步线程 5 秒，而静默登录（SilentLoginWorker）与登录窗口的
+        LoginWorker 都是无父对象的 QThread：退出时解释器拆卸会销毁仍在运行的
+        QThread，触发 “QThread: Destroyed while thread is still running” 并以
+        0xC0000409 崩溃退出。这里把三类 worker 一并纳入有界等待 + 轮询。
         """
-        worker = self.sync_worker
-        if worker is not None and worker.isRunning():
-            worker.stop()
-            if not worker.wait(5000):
-                self._quit_pending = True
-                self.tray.notify(
-                    "正在安全停止同步…",
-                    "同步线程结束后会自动退出；也可以继续在托盘里使用。",
-                )
-                QTimer.singleShot(2000, self._retry_quit)
-                return
-        self._finish_quit()
+        if self.sync_worker is not None and self.sync_worker.isRunning():
+            self.sync_worker.stop()
+            self.sync_worker.wait(5000)
+        # 登录请求有超时上限（timeout=60），先给一个有界等待
+        if self._await_quit_workers(5000):
+            self._finish_quit()
+            return
+        self._quit_pending = True
+        self.tray.notify(
+            "正在安全停止后台任务…",
+            "同步/登录线程结束后会自动退出；也可以继续在托盘里使用。",
+        )
+        QTimer.singleShot(2000, self._retry_quit)
+
+    def _pending_quit_workers(self) -> list:
+        """仍在运行、退出前必须等待的 worker 列表。"""
+        workers = []
+        if self.sync_worker is not None and self.sync_worker.isRunning():
+            workers.append(self.sync_worker)
+        if self.login_worker is not None and self.login_worker.isRunning():
+            workers.append(self.login_worker)
+        if self.login_window is not None:
+            worker = self.login_window.worker
+            if worker is not None and worker.isRunning():
+                workers.append(worker)
+        return workers
+
+    def _await_quit_workers(self, timeout_ms: int) -> bool:
+        """有界等待所有后台 worker 结束；仍在运行的返回 False。"""
+        import time as _time
+        deadline = _time.monotonic() + timeout_ms / 1000.0
+        for worker in self._pending_quit_workers():
+            remaining_ms = int(max(0.0, deadline - _time.monotonic()) * 1000)
+            if not worker.wait(max(remaining_ms, 100)):
+                return False
+        return not self._pending_quit_workers()
 
     def _retry_quit(self) -> None:
-        """等待同步线程结束的轮询；仍在运行就继续等，不做任何强制终止。"""
+        """等待后台线程结束的轮询；仍在运行就继续等，不做任何强制终止。"""
         if not self._quit_pending:
             return
-        worker = self.sync_worker
-        if worker is not None and worker.isRunning():
+        if self._pending_quit_workers():
             QTimer.singleShot(2000, self._retry_quit)
             return
         self._finish_quit()

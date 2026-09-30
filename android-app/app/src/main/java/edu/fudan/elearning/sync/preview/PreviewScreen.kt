@@ -23,6 +23,9 @@ import edu.fudan.elearning.sync.R
 import edu.fudan.elearning.sync.office.OfficePreviewScreen
 import java.io.File
 
+/** 走富文本渲染的 HTML 扩展名（与桌面端 previewer 的 HTML 集合一致）。 */
+private val HTML_EXTENSIONS = setOf("html", "htm", "xhtml")
+
 /**
  * 统一预览路由：文件存在性/权限检查 -> [FileTypes] 类型识别 -> 分发到具体预览。
  *
@@ -90,7 +93,10 @@ fun PreviewScreen(
                 else -> when (kind) {
                     PreviewKind.PDF -> PdfPreviewScreen(file)
                     PreviewKind.IMAGE -> ImagePreviewScreen(file)
-                    PreviewKind.TEXT -> TextPreviewScreen(file)
+                    // html/htm 走富文本渲染（不再显示源文本），其余文本/代码走源码视图
+                    PreviewKind.TEXT ->
+                        if (FileTypes.extOf(file.name) in HTML_EXTENSIONS) HtmlPreviewScreen(file)
+                        else TextPreviewScreen(file)
                     PreviewKind.MEDIA -> MediaPreviewScreen(file)
                     PreviewKind.OFFICE -> OfficePreviewScreen(file, title)
                     PreviewKind.STRUCTURED -> OfficeFallbackScreen(file, title)

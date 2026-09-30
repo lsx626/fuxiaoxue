@@ -93,7 +93,11 @@ object OfficeExtractor {
                     "ppt", "pptx" -> SlideExtractor.extract(
                         file, targetW, report, ::downscaleImage
                     )
-                    "doc", "docx" -> PageRenderer.paginate(WordExtractor.extract(file, targetW))
+                    // 与 PPT 路径同样传入降采样：照片多的 docx 会因页模型常驻
+                    // 原始字节而 OOM（v1.0.9 只接了 Slide 路径，Word 漏了）
+                    "doc", "docx" -> PageRenderer.paginate(
+                        WordExtractor.extract(file, targetW, ::downscaleImage)
+                    )
                     else -> SheetExtractor.extract(file, targetW)
                 }
                 val scale = OfficeLimits.pageScale(pages.size)

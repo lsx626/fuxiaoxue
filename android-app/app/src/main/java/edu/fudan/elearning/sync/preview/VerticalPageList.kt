@@ -95,6 +95,9 @@ fun VerticalPageList(
     var showJumpDialog by remember { mutableStateOf(false) }
     // 全局缩放置位：递增后各页恢复 1x 并清除平移
     var zoomResetToken by remember { mutableStateOf(0) }
+    // LazyColumn 在页条目之前还有固定条目：可选的 header + 控制按钮行。
+    // 跳到第 N 页必须跳过这些固定条目，否则少算 1~2 项。
+    val fixedItemCount = (if (header != null) 1 else 0) + 1
 
     LazyColumn(
         state = listState,
@@ -158,7 +161,8 @@ fun VerticalPageList(
                 TextButton(onClick = {
                     val page = pageText.toIntOrNull()
                     if (page != null && page in 1..pageCount) {
-                        scope.launch { listState.scrollToItem(page - 1) }
+                        // 列表前有固定条目（header + 控制行），页码必须换算成列表索引
+                        scope.launch { listState.scrollToItem(fixedItemCount + page - 1) }
                         showJumpDialog = false
                     }
                 }) {

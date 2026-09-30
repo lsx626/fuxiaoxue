@@ -92,7 +92,37 @@ class StateStore:
                 key TEXT PRIMARY KEY,
                 value TEXT
             );
-            """)
+
+            CREATE TABLE IF NOT EXISTS assignments (
+                id INTEGER PRIMARY KEY,
+                course_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                due_at TEXT DEFAULT '',
+                html_url TEXT DEFAULT '',
+                fetched_at TEXT DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS sync_changes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER DEFAULT 0,
+                file_id INTEGER NOT NULL,
+                course_id INTEGER NOT NULL,
+                filename TEXT DEFAULT '',
+                change TEXT DEFAULT '',        -- new | updated | removed
+                occurred_at TEXT DEFAULT ''
+            );            """)
+        # 本地全文索引（v1.1.0 起）：CJK 预分词后的 FTS5 虚拟表。
+        # 放在写事务之外单独建：失败时只把异常变成「索引不可用」的降级标记，
+        # 不能触发 __exit__ 回滚把建表/建索引一起回滚掉。
+        self._fts_available = True
+        try:
+            self.conn.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS files_fts USING fts5("
+                "filename, content, file_id UNINDEXED)")
+        except sqlite3.OperationalError as exc:
+            self._fts_available = False
+            if self.log:
+                self.log.warning("当前 SQLite 不支持 FTS5，搜索将退化为文件名匹配: %s", exc)
 
     _write_lock = threading.Lock()
 
@@ -291,6 +321,191 @@ class StateStore:
         cur = self.conn.execute(
             "SELECT * FROM files WHERE course_id=? ORDER BY folder_path, filename",
             (course_id,))
+        return [dict(r) for r in cur.fetchall()]
+
+    # ------------------------------------------------------------------
+    # 本地全文索引（v1.1.0 起；文件内容搜索见 search_index.py）
+    # ------------------------------------------------------------------
+    def upsert_file_index(self, file_id: int, filename: str, text: Optional[str]) -> None:
+        """写入/更新某个文件的全文索引（文件名 + 内容）。
+
+        索引列存的是 CJK 预分词后的文本（默认 unicode61 不做中文分词，
+        原样写入会让「计算机」永远命中不了「计算机体系结构」）。
+        重复调用是覆盖语义（先删后插），已有索引不会重复累积。
+        """
+        if not self._fts_available:
+            return
+        from .search_index import tokenize_for_index
+        with self._write_lock_cursor() as cur:
+            cur.execute("DELETE FROM files_fts WHERE file_id=?", (file_id,))
+            cur.execute(
+                "INSERT INTO files_fts (filename, content, file_id) VALUES (?, ?, ?)",
+                (tokenize_for_index(filename or ""),
+                 tokenize_for_index(text or ""), file_id))
+
+    def remove_file_index(self, file_id: int) -> None:
+        """文件记录被删除时同步清掉索引，避免搜到已经不存在的文件。"""
+        if not self._fts_available:
+            return
+        with self._write_lock_cursor() as cur:
+            cur.execute("DELETE FROM files_fts WHERE file_id=?", (file_id,))
+
+    def delete_file(self, file_id: int) -> None:
+        """删除单个文件记录（连同搜索索引）。
+
+        存储管理器此前跨类调用 `_write_lock_cursor` 直接执行 DELETE，
+        既绕过封装也漏掉搜索索引；此方法把删除收拢为一条原子路径。
+        """
+        with self._write_lock_cursor() as cur:
+            cur.execute("DELETE FROM files WHERE file_id=?", (file_id,))
+            if self._fts_available:
+                cur.execute("DELETE FROM files_fts WHERE file_id=?", (file_id,))
+
+    # ------------------------------------------------------------------
+    # 作业截止日期与变更摘要（v1.1.0 起；与 Android 端同表结构）
+    # ------------------------------------------------------------------
+    def upsert_assignments(self, course_id: int, assignments) -> None:
+        """整课替换式写入作业（id/name/due_at/html_url）。"""
+        with self._write_lock_cursor() as cur:
+            cur.execute("DELETE FROM assignments WHERE course_id=?", (course_id,))
+            for item in assignments:
+                cur.execute(
+                    "INSERT OR REPLACE INTO assignments (id, course_id, name, due_at, html_url) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (item["assignment_id"], course_id, item["name"],
+                     item.get("due_at") or "", item.get("html_url") or ""))
+
+    def list_assignments(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """按截止时间升序列出作业（供待办视图；只列有截止时间的）。"""
+        cur = self.conn.execute(
+            """SELECT a.id, a.course_id, a.name, a.due_at, a.html_url,
+                      c.name AS course_name
+               FROM assignments a LEFT JOIN courses c ON c.id = a.course_id
+               WHERE a.due_at != ''
+               ORDER BY a.due_at ASC LIMIT ?""",
+            (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+    def record_file_change(self, run_id: int, file_id: int, course_id: int,
+                           filename: str, change: str, occurred_at: str = "") -> None:
+        """记录一个文件级变更（new / updated / removed）。"""
+        with self._write_lock_cursor() as cur:
+            cur.execute(
+                "INSERT INTO sync_changes (run_id, file_id, course_id, filename, change, occurred_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (run_id, file_id, course_id, filename, change, occurred_at))
+
+    def record_removed_changes(self, course_id: int, seen_file_ids: List[int],
+                               course_name: str = "") -> None:
+        """把「本轮未见且仍标记为非 remote_missing」的文件记为 removed。
+
+        必须在 `mark_missing_files` **之前**调用：调用方（同步引擎）已保证
+        只有文件列表完整成功时才会调用本方法，因此这里不会再做闸门判断。
+        """
+        placeholders = ",".join("?" * len(seen_file_ids)) if seen_file_ids else "0"
+        cur = self.conn.execute(
+            f"""SELECT file_id, filename FROM files
+                WHERE course_id=? AND status != 'remote_missing'
+                  AND file_id NOT IN ({placeholders})""",
+            (course_id, *seen_file_ids),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        if not rows:
+            return
+        now = now_utc()
+        with self._write_lock_cursor() as wcur:
+            for row in rows:
+                wcur.execute(
+                    "INSERT INTO sync_changes (run_id, file_id, course_id, filename, change, occurred_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (0, row["file_id"], course_id,
+                     row.get("filename") or "", "removed", now))
+
+    def recent_changes(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """最近的文件变更（通知摘要与「最近变更」视图的来源）。"""
+        cur = self.conn.execute(
+            """SELECT s.file_id, s.course_id, s.filename, s.change, s.occurred_at,
+                      c.name AS course_name
+               FROM sync_changes s LEFT JOIN courses c ON c.id = s.course_id
+               ORDER BY s.id DESC LIMIT ?""",
+            (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+    def trim_changes(self, keep: int = 500) -> None:
+        """变更摘要只保留最近 [keep] 条（无界增长没有意义）。"""
+        with self._write_lock_cursor() as cur:
+            cur.execute(
+                "DELETE FROM sync_changes WHERE id NOT IN "
+                "(SELECT id FROM sync_changes ORDER BY id DESC LIMIT ?)",
+                (keep,))
+
+    def unindexed_downloaded_files(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """已下载但尚未建立内容索引的文件（老库迁移与增量回填用）。"""
+        try:
+            cur = self.conn.execute(
+                """SELECT f.file_id, f.filename, f.display_name, f.local_path
+                   FROM files f
+                   WHERE f.status='downloaded' AND f.local_path IS NOT NULL
+                     AND f.file_id NOT IN (SELECT file_id FROM files_fts)
+                   ORDER BY f.downloaded_at DESC LIMIT ?""",
+                (limit,))
+            return [dict(r) for r in cur.fetchall()]
+        except sqlite3.OperationalError:
+            return []
+
+    def search_files(self, query: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """跨课程搜索本地文件（文件名 + 内容）。remote_missing 不参与搜索。"""
+        from .search_index import build_match_query
+        match = build_match_query(query)
+        if match is None:
+            return []
+        if self._fts_available:
+            try:
+                return self._search_fts(match, limit)
+            except sqlite3.OperationalError:
+                # 前缀语法等边界情况失败时退化为文件名匹配，不能让搜索崩
+                pass
+        return self._search_filename_like(query, limit)
+
+    def _search_fts(self, match: str, limit: int) -> List[Dict[str, Any]]:
+        cur = self.conn.execute(
+            """SELECT f.file_id, f.course_id, f.filename, f.display_name, f.size,
+                      f.status, f.local_path, c.name AS course_name,
+                      COALESCE(snippet(files_fts, 1, '[', ']', '…', 12),
+                               snippet(files_fts, 0, '[', ']', '…', 12)) AS snippet
+               FROM files_fts
+               JOIN files f ON f.file_id = files_fts.file_id
+               LEFT JOIN courses c ON c.id = f.course_id
+               WHERE files_fts MATCH ? AND f.status != 'remote_missing'
+               ORDER BY rank LIMIT ?""",
+            (match, limit))
+        return [dict(r) for r in cur.fetchall()]
+
+    @staticmethod
+    def _like_term(query: str) -> str:
+        cleaned = "%" + "".join(
+            ch for ch in query if ch not in "%_") .replace(" ", "%") + "%"
+        return cleaned
+
+    def _search_filename_like(self, query: str, limit: int) -> List[Dict[str, Any]]:
+        """FTS5 不可用（或不支持的语法）时的降级搜索：只匹配文件名。"""
+        terms = [term for term in (query or "").split() if term]
+        if not terms:
+            return []
+        clauses = []
+        params: List[Any] = []
+        for term in terms:
+            clauses.append("(LOWER(f.filename) LIKE ? OR LOWER(f.display_name) LIKE ?)")
+            like = self._like_term(term.lower())
+            params.extend([like, like])
+        params.append(limit)
+        cur = self.conn.execute(
+            f"""SELECT f.file_id, f.course_id, f.filename, f.display_name, f.size,
+                       f.status, f.local_path, c.name AS course_name, NULL AS snippet
+                FROM files f LEFT JOIN courses c ON c.id = f.course_id
+                WHERE f.status != 'remote_missing' AND ({" AND ".join(clauses)})
+                ORDER BY f.filename LIMIT ?""",
+            params)
         return [dict(r) for r in cur.fetchall()]
 
     # ------------------------------------------------------------------

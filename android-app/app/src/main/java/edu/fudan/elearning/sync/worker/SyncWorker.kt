@@ -46,16 +46,30 @@ class SyncWorker(context: Context, params: WorkerParameters) :
         )
 
         // 同步：与手动同步互斥；已有同步在跑时直接跳过本次后台任务
+        var recentChanges: List<edu.fudan.elearning.sync.data.FileChange> = emptyList()
         val result = SyncGate.runOrSkip {
+            // 必须关闭：Worker 每轮新建连接，泄漏的 SQLiteDatabase 句柄会
+            // 累积并加剧与 UI 连接的锁竞争
             val repo = Repo(applicationContext)
-            val api = CanvasApi()
-            val engine = SyncEngine(applicationContext, api, repo)
-            engine.sync(full = false)
+            try {
+                val api = CanvasApi()
+                val engine = SyncEngine(applicationContext, api, repo)
+                val runResult = engine.sync(full = false)
+                // 通知摘要：在连接关闭前取回本轮文件级变更（v1.1.0 变更摘要）
+                recentChanges = runCatching {
+                    repo.recentChanges(minOf(maxOf(runResult.filesDownloaded, 1), 12))
+                }.getOrDefault(emptyList())
+                runResult
+            } finally {
+                repo.close()
+            }
         } ?: return Result.success()
 
-        // 下载新文件后发通知
+        // 下载新文件后发通知（按课程列出文件名，不再只是计数）
         if (result.filesDownloaded > 0) {
-            Notifier.notifySyncComplete(applicationContext, result.filesDownloaded, result.bytesDownloaded)
+            Notifier.notifySyncComplete(
+                applicationContext, result.filesDownloaded, result.bytesDownloaded, recentChanges
+            )
         }
         if (result.filesFailed > 0 && result.ok) {
             Notifier.notifySyncError(

@@ -162,12 +162,21 @@ object PageRenderer {
         return pages
     }
 
-    /** 列权重 -> 绝对像素宽（按内容宽度归一化）；权重缺失或列数不符则均分。 */
+    /**
+     * 列权重 -> 绝对像素宽（按内容宽度归一化）；权重缺失或列数不符则均分。
+     *
+     * 24px 下限施加后再做一次总宽归一化：列数很多时（如 40 列 × 880px 内容宽）
+     * 直接 clamp 会让总宽 960 > 880，右边的列被画到页边距外裁掉。归一化后
+     * 各列允许窄于 24px，但总宽恒等于内容宽度。
+     */
     private fun columnWidths(ncol: Int, weights: List<Float>, contentW: Float): List<Float> {
         if (ncol <= 0) return emptyList()
         if (weights.size == ncol && weights.sum() > 0f) {
             val sum = weights.sum()
-            return weights.map { (it / sum * contentW).coerceAtLeast(24f) }
+            val clamped = weights.map { (it / sum * contentW).coerceAtLeast(24f) }
+            val total = clamped.sum()
+            return if (total <= contentW) clamped
+            else clamped.map { it / total * contentW }
         }
         return List(ncol) { contentW / ncol }
     }
@@ -556,6 +565,9 @@ object PageRenderer {
             val w = rect.width().roundToInt().coerceAtLeast(1)
             val layout = StaticLayout.Builder.obtain(sb, 0, sb.length, paint, w)
                 .setAlignment(alignOf(para.align))
+                // 必须与分页测量（paginate）使用同一行距倍数，否则分页算出的
+                // 高度比实际画出来的大，段尾积累空白、换页偏早
+                .setLineSpacing(0f, 1.25f)
                 .build()
             layouts.add(layout to para.spaceAfterPx)
             totalH += layout.height + para.spaceAfterPx

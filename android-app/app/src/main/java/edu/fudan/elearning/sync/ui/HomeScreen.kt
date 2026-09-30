@@ -35,6 +35,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -58,10 +59,13 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -99,7 +103,7 @@ fun HomeScreen(viewModel: AppViewModel) {
     val syncProgress by viewModel.syncProgress.collectAsState()
     val loginState by viewModel.loginState.collectAsState()
 
-    var selectedTab by remember { mutableStateOf(Tab.COURSES) }
+    var selectedTab by rememberSaveable { mutableStateOf(Tab.COURSES) }
     val selectedCourse by viewModel.selectedCourse.collectAsState()
 
     // 系统返回键：在文件列表层返回课程列表，而不是直接退出应用
@@ -139,6 +143,13 @@ fun HomeScreen(viewModel: AppViewModel) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { viewModel.openSearch() }) {
+                        Icon(
+                            Icons.Filled.Search,
+                            contentDescription = "搜索文件",
+                            tint = MaterialTheme.colorScheme.onPrimary
+                        )
+                    }
                     SyncButton(syncing = syncing, onClick = { viewModel.sync() })
                     HomeOverflowMenu(viewModel)
                 },
@@ -223,12 +234,68 @@ fun HomeScreen(viewModel: AppViewModel) {
             when {
                 selectedCourse != null -> FileListView(viewModel, selectedCourse!!)
                 selectedTab == Tab.COURSES ->
-                    CourseListView(viewModel, courses) { viewModel.selectCourse(it.course.id) }
+                    Column {
+                        UpcomingDeadlines(viewModel)
+                        CourseListView(viewModel, courses) { viewModel.selectCourse(it.course.id) }
+                    }
                 selectedTab == Tab.STORAGE -> StorageView(viewModel, courses)
                 else -> SettingsView(viewModel, loginState)
             }
         }
     }
+}
+
+/**
+ * 最近截止的作业（v3 起）：同步时从 Canvas assignments 采集 `due_at`。
+ * 没有截止时间时不占位；有截至作业时按时间升序展示最多 3 项。
+ */
+@Composable
+private fun UpcomingDeadlines(viewModel: AppViewModel) {
+    val upcoming by viewModel.upcoming.collectAsState()
+    if (upcoming.isEmpty()) {
+        Text(
+            stringResource(R.string.upcoming_deadlines_empty),
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        return
+    }
+    Card(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Text(
+                stringResource(R.string.upcoming_deadlines_title),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.size(6.dp))
+            upcoming.take(3).forEach { assignment ->
+                Text(
+                    "【${formatDueAt(assignment.dueAt)}】${assignment.name}",
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(vertical = 2.dp)
+                )
+            }
+        }
+    }
+}
+
+/** Canvas due_at（ISO8601 带偏移）转成本地可读的「MM-dd HH:mm」。 */
+private fun formatDueAt(dueAt: String): String {
+    if (dueAt.isEmpty()) return "无截止"
+    return runCatching {
+        val parsed = java.time.OffsetDateTime.parse(dueAt)
+        val local = parsed.atZoneSameInstant(java.time.ZoneId.systemDefault())
+        local.format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"))
+    }.getOrElse { dueAt.take(16) }
 }
 
 /** 顶栏溢出菜单：全量同步等次要但常用的操作。 */
@@ -517,7 +584,11 @@ private fun FileListView(viewModel: AppViewModel, stats: CourseStats) {
     // 数据版本号作为 key：删除/同步后必须立刻反映数据库变化，
     // 不能只按课程 id 缓存（历史缺陷：删完文件界面还在显示旧列表）。
     val dataVersion by viewModel.dataVersion.collectAsState()
-    val files = remember(stats.course.id, dataVersion) { viewModel.filesOf(stats.course.id) }
+    // filesOf 是挂起函数（查询在 IO 线程）：用 produceState 异步加载，
+    // 不在组合期阻塞主线程
+    val files by produceState(emptyList<FileItem>(), stats.course.id, dataVersion) {
+        value = viewModel.filesOf(stats.course.id)
+    }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
@@ -614,10 +685,18 @@ private fun FileRow(file: FileItem, viewModel: AppViewModel) {
                 file.status == "downloaded" -> TextButton(onClick = { viewModel.openPreview(file) }) {
                     Text("预览")
                 }
-                file.status == "failed" || file.status == "remote_missing" ->
+                file.status == "failed" ->
                     TextButton(onClick = { viewModel.retryFile(file) }) {
                         Text("重试")
                     }
+                // 远端已删除：重试只会 404，还会把准确的 remote_missing 状态改写成
+                // failed；这里显示不可操作的状态说明
+                file.status == "remote_missing" -> Text(
+                    "远端已删除",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
                 else -> Text(
                     stringResource(R.string.file_pending),
                     style = MaterialTheme.typography.labelSmall,
@@ -639,11 +718,14 @@ private fun FileRow(file: FileItem, viewModel: AppViewModel) {
 /** 存储管理：学期筛选 + 批量删除（删除前需二次确认）。 */
 @Composable
 private fun StorageView(viewModel: AppViewModel, courses: List<CourseStats>) {
-    val terms = remember { courses.map { it.course.term }.filter { it.isNotEmpty() }.distinct() }
-    var selectedTerm by remember { mutableStateOf<String?>(null) }
+    // terms 必须以 courses 为 key：同步出全新学期后不刷新会成为永久旧数据
+    val terms = remember(courses) { courses.map { it.course.term }.filter { it.isNotEmpty() }.distinct() }
+    var selectedTerm by rememberSaveable { mutableStateOf<String?>(null) }
     var expandedCourse by remember { mutableStateOf<CourseStats?>(null) }
     var pendingDeleteCourse by remember { mutableStateOf<CourseStats?>(null) }
     var pendingDeleteFile by remember { mutableStateOf<FileItem?>(null) }
+
+    val dataVersion by viewModel.dataVersion.collectAsState()
 
     Column(Modifier.fillMaxSize().padding(16.dp)) {
         Text("按学期筛选", style = MaterialTheme.typography.titleSmall)
@@ -689,7 +771,8 @@ private fun StorageView(viewModel: AppViewModel, courses: List<CourseStats>) {
                     },
                     onDeleteAll = { pendingDeleteCourse = stats },
                     onDeleteFile = { pendingDeleteFile = it },
-                    filesProvider = { viewModel.filesOf(stats.course.id) }
+                    filesProvider = { viewModel.filesOf(stats.course.id) },
+                    dataVersion = dataVersion
                 )
             }
         }
@@ -726,7 +809,10 @@ private fun StorageCourseCard(
     onToggle: () -> Unit,
     onDeleteAll: () -> Unit,
     onDeleteFile: (FileItem) -> Unit,
-    filesProvider: () -> List<FileItem>
+    /** 挂起的文件查询（内部切 IO 线程，不阻塞组合） */
+    filesProvider: suspend () -> List<FileItem>,
+    /** 数据版本号：删除/同步后必须重新查询，不能缓存旧列表 */
+    dataVersion: Int
 ) {
     Card(
         Modifier.fillMaxWidth(),
@@ -755,7 +841,9 @@ private fun StorageCourseCard(
             }
             if (expanded) {
                 Spacer(Modifier.height(8.dp))
-                val files = filesProvider()
+                val files by produceState(emptyList<FileItem>(), stats.course.id, dataVersion) {
+                    value = filesProvider()
+                }
                 if (files.isEmpty()) {
                     Text(
                         "暂无文件",
@@ -873,7 +961,10 @@ private fun SettingsView(viewModel: AppViewModel, loginState: LoginState) {
             Spacer(Modifier.height(8.dp))
             // 上次同步结果（含失败原因）：让用户能判断资料是否真的同步成功
             val dataVersion by viewModel.dataVersion.collectAsState()
-            val lastSummary = remember(dataVersion) { viewModel.lastSyncSummary() }
+            var lastSummary by remember { mutableStateOf("加载中…") }
+            LaunchedEffect(dataVersion) {
+                lastSummary = viewModel.lastSyncSummary()
+            }
             Text(
                 "上次同步：$lastSummary",
                 style = MaterialTheme.typography.bodySmall,

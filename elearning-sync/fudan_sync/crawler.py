@@ -61,10 +61,25 @@ class CoursePage:
 
 
 @dataclass
+class AssignmentInfo:
+    """课程作业（带截止日期）。采集自 Canvas assignments 接口。
+
+    Python 端与 Android 端的 `CanvasAssignment` 保持同一字段口径
+    （id/name/due_at/html_url），两端待办视图共用同一套数据语义。
+    """
+    assignment_id: int
+    course_id: int
+    name: str
+    due_at: str = ""         # Canvas 返回的 ISO8601，可能为空（无截止时间）
+    html_url: str = ""
+
+
+@dataclass
 class CrawlResult:
     course_id: int
     files: Dict[int, RemoteFile] = field(default_factory=dict)
     pages: List[CoursePage] = field(default_factory=list)
+    assignments: List[AssignmentInfo] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     # 课程"文件"工具列表是否成功拉取。
     # 只有成功拉取时，"本轮未见的文件 = 远端已删除"这一推断才成立；
@@ -275,6 +290,12 @@ class Crawler:
                 title = assignment.get("name") or "untitled"
                 body = assignment.get("description") or ""
                 self._add_referenced(course_id, body, result, "assignment", f"作业: {title}")
+                # 截止日期（可能为空）：这是待办视图的唯一权威来源，之前一直被丢弃
+                result.assignments.append(AssignmentInfo(
+                    assignment_id=int(assignment.get("id") or 0),
+                    course_id=course_id, name=title,
+                    due_at=str(assignment.get("due_at") or ""),
+                    html_url=str(assignment.get("html_url") or "")))
                 if collect and body:
                     result.pages.append(CoursePage(
                         course_id, "assignment", title,

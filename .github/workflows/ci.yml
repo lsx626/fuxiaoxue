@@ -1,0 +1,71 @@
+name: CI
+
+# 双端持续集成：
+# - desktop：Windows runner 上跑完整 pytest（offscreen Qt）；
+# - android：Linux runner 上跑 lintDebug + JVM 单测 + assembleDebug。
+#
+# 注意（与本机无关的 CI 优势）：CI 的检出路径是纯 ASCII，
+# Gradle 单测 worker 的 @argfile 中文路径问题在 CI 上不存在；
+# 本机仍然需要 ASCII junction（见 AGENTS.md §19.2）。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  desktop:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: 安装依赖
+        working-directory: elearning-sync
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+
+      - name: 发布环境导入探针（Office/图片/配置解析栈必须可用）
+        working-directory: elearning-sync
+        run: python -c "import docx, pptx, PIL.Image, yaml, lxml.etree, fitz; from PySide6.QtMultimedia import QMediaPlayer; print('IMPORT_PROBE_OK')"
+
+      - name: 运行桌面测试（offscreen Qt）
+        working-directory: elearning-sync
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONDONTWRITEBYTECODE: '1'
+          PYTHONIOENCODING: utf-8
+        run: python -m pytest -q -p no:cacheprovider
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: 安装 Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            platforms;android-36
+            build-tools;36.0.0
+            platform-tools
+
+      - uses: gradle/actions/setup-gradle@v3
+
+      - name: 构建与测试
+        working-directory: android-app
+        run: ./gradlew --console=plain --no-daemon lintDebug testDebugUnitTest assembleDebug
+        env:
+          JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8

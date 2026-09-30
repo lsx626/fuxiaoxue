@@ -19,6 +19,7 @@ import edu.fudan.elearning.sync.ui.FuXiaoXueTheme
 import edu.fudan.elearning.sync.ui.HomeScreen
 import edu.fudan.elearning.sync.ui.LoginScreen
 import edu.fudan.elearning.sync.ui.LoginState
+import edu.fudan.elearning.sync.ui.SearchScreen
 
 /** 应用主入口。 */
 class MainActivity : ComponentActivity() {
@@ -36,15 +37,20 @@ class MainActivity : ComponentActivity() {
                 val viewModel: AppViewModel = viewModel()
                 val loginState by viewModel.loginState.collectAsState()
                 val target by viewModel.previewTarget.collectAsState()
+                val searchOpen by viewModel.searchOpen.collectAsState()
 
+                // 全局搜索为全屏覆盖层（与预览同一路由模式），返回键先关搜索。
+                if (searchOpen) {
+                    BackHandler { viewModel.closeSearch() }
+                }
                 // 应用内预览为全屏覆盖层，独立于登录/主界面路由。
                 // 系统返回键优先关闭预览，而不是直接退出应用。
                 if (target != null) {
                     BackHandler { viewModel.closePreview() }
                 }
                 val preview = target
-                if (preview != null) {
-                    PreviewScreen(
+                when {
+                    preview != null -> PreviewScreen(
                         file = preview.file,
                         displayName = preview.title,
                         onBack = viewModel::closePreview,
@@ -54,8 +60,8 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     )
-                } else {
-                    when (val state = loginState) {
+                    searchOpen -> SearchScreen(viewModel)
+                    else -> when (val state = loginState) {
                         is LoginState.LoggedIn -> HomeScreen(viewModel)
                         else -> LoginScreen(state) { username, password, remember ->
                             viewModel.login(username, password, remember)

@@ -134,4 +134,31 @@ class DownloadPlanTest {
         assertEquals("", DownloadPlan.safeRelativeDir(null))
         assertEquals("", DownloadPlan.safeRelativeDir("   "))
     }
+
+    @Test
+    fun partOutputStream_appendKeepsExistingBytes() {
+        // 断点续传的核心不变量：续传分支写入的新字节必须拼接在已有字节之后，
+        // 而不是覆盖掉它们。旧实现直接 part.outputStream()（截断模式），
+        // 已下载的头部被丢弃、只留下 206 的尾部片段，文件就此损坏。
+        val dest = File(temp.root, "报告.pdf")
+        val part = DownloadPlan.partFile(dest)
+        part.writeBytes("头部已被".toByteArray(Charsets.UTF_8))
+
+        DownloadPlan.partOutputStream(part, append = true).use { it.write("续传完成".toByteArray(Charsets.UTF_8)) }
+
+        val content = part.readText(Charsets.UTF_8)
+        assertEquals("头部已被续传完成", content)
+    }
+
+    @Test
+    fun partOutputStream_truncateDiscardsExistingBytes() {
+        // 全新下载（200 响应）必须从头写，避免旧 .part 残留字节污染内容
+        val dest = File(temp.root, "报告2.pdf")
+        val part = DownloadPlan.partFile(dest)
+        part.writeBytes("过时的旧内容".toByteArray(Charsets.UTF_8))
+
+        DownloadPlan.partOutputStream(part, append = false).use { it.write("全新".toByteArray(Charsets.UTF_8)) }
+
+        assertEquals("全新", part.readText(Charsets.UTF_8))
+    }
 }

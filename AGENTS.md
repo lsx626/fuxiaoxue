@@ -47,6 +47,23 @@
 - **Android 权限与 FileProvider 收窄**（原 P2）：移除未使用的 `READ/WRITE_EXTERNAL_STORAGE`（应用只写自己的专属目录并经 FileProvider 分享）、`WAKE_LOCK`/`RECEIVE_BOOT_COMPLETED`/`FOREGROUND_SERVICE*`（由 androidx.work 的库清单声明，应用自身不需要），删除 `usesCleartextTraffic="true"`（全部接口为 HTTPS）；`res/xml/file_paths.xml` 从 `<external-path path="." />`（整块外部存储）收窄为 `<external-files-path path="elearning/" />` + 应用私有 files/cache。
 - 新增根目录 `CHANGELOG.md`（原 P2「建立 CHANGELOG」），记录 v1.0.5 起各版本的用户可见变化；发布说明仍以 GitHub Release 为准。
 
+`v1.0.13`（Android 1.0.13 / versionCode 14 / 桌面 1.0.9）是全仓库代码审计后的修复+补齐版本（2026-09-30），完整清单见 `CHANGELOG.md`：
+
+**Android**：`.part` 续传截断导致文件损坏（P0，`FileOutputStream` 追加模式修复 + `DownloadPlanTest` 回归）；预览跳页恒定错位（未计入 header/工具栏前置条目）；全量同步不清除「来源未启用」记忆（`Prefs.clearDisabledSources` 从未被调用）；主线程 SQLite/文件/Keystore I/O 全部切到 `Dispatchers.IO`（违反 §8 硬性约束）；手动同步无兜底异常处理（磁盘满/SQLite 锁导致进程崩溃）；退出登录不取消进行中的同步；单文件「重试」用过期签名 URL（现与 `SyncEngine` 同样在 404/403 时换取新 URL）且 `remote_missing` 不再显示「重试」；`Repo.upsertCourses` 在 `last_synced_at` 为 NULL 时 REPLACE 触发外键级联清空文件记录的风险；Excel 日期单元格渲染成序列号（改用 `DataFormatter`）；Word 内嵌图片未降采样导致 OOM（`WordExtractor` 接入 `downscaleImage`）；工作表分页页高多算一行、合并单元格文本被压到首列宽、超宽表格 24px 列宽下限溢出；`.ppt`（HSLF）母版装饰图形不渲染；Word 段落分页与渲染行高不一致（1.25 vs 1.0）；PDF 预览 pfd 泄漏与 `PdfRenderer` 跨线程 `openPage` 竞态；文本预览单次 `read()` 静默截断；OfficeFallback 解压对超大条目无内存上限；`SessionCookieJar` 并发不安全；HomeScreen 列表 `remember` 无 key 缓存旧数据；开启 SQLite WAL 并在 Worker 每轮关闭数据库连接。**功能**：新增 HTML 富文本应用内预览（`preview/HtmlPreviewScreen.kt`，取代显示源文本）。
+
+**桌面**：设置页保存「同步根目录」不生效（P1，键路径误传字符串写入垃圾嵌套键；`update_config` 现在对字符串键路径显式报错）；退出时只等同步线程导致 `QThread: Destroyed while thread is still running` 崩溃（0xC0000409，现覆盖三类 worker 有界等待 + 轮询）；首次登录后不立即首次同步（判断条件是死代码，改用 `state.last_run()`）；开机自启命令双重引号导致 CreateProcess 拒绝启动（ERROR_INVALID_PARAMETER）；设置/存储管理对话框每次打开泄漏隐藏窗口树（补 `WA_DeleteOnClose`）；配置写入原子化（临时文件 + `os.replace`）。
+
+**测试**：桌面 `tests/test_desktop_p2_fixes.py`（+6，基线 80 passed）；Android JVM `DownloadPlanTest`（+2，基线 81 项全绿，经 ASCII junction 运行）。
+
+`v1.1.0`（Android 1.1.0 / versionCode 15 / 桌面 1.1.0，2026-09-30 发布）是「刚需三件套」补齐版本，均**双端同步落地**：
+
+- **本地全文搜索**：桌面 FTS5 / Android FTS4（平台 FTS5 可用性不一致，FTS4 全版本可用），两端共享同一套 CJK unigram+bigram 预分词（默认 unicode61 不分词，「计算机」命中不了「计算机体系结构」）。桌面 `Ctrl+K` 全局搜索 + `Ctrl+F` 课程内过滤；Android 顶栏搜索入口、结果直达应用内预览。索引在下载完成时增量写入，老库由同步收尾每轮 200 个分批回填；搜索范围限已下载文件、排除 `remote_missing`，FTS 不可用时降级为文件名 LIKE。
+- **作业截止日期/待办**：两端 crawler 此前都请求 assignments 接口却丢弃 `due_at`，现已采集入库（同表结构同字段口径）。桌面「截止日期」对话框按时间排序（已过期红色）+ **.ics 导出**；Android 课程列表顶部「最近截止」区。
+- **同步变更摘要**：`sync_changes` 表记录文件级 new/updated/removed（删除记录复用既有安全闸门）。通知从「新增 N 个文件」升级为按课程列文件名；桌面另有「最近变更」对话框与「截止日期」「最近变更」两个顶栏入口。
+- **CI**：`.github/workflows/ci.yml`——Windows 跑桌面 pytest（含发布环境导入探针），Linux/JDK21 跑 Android lint + JVM 单测 + debug 构建。
+
+**测试**：桌面 133 passed（`test_search_index.py` +41、`test_search_ui.py` +1、`test_deadlines_and_changes.py` +11）；Android JVM 98 passed（`SearchIndexTest` +17，经 ASCII junction）；插桩 32 passed（`SearchInstrumentedTest` +9，含 FTS4 CJK 子串、v2→v3 迁移保留数据、回填、作业排序、变更 trim；同轮修复 `HomeScreenTest` 登录态注入竞态——同一 `MutableStateFlow` 注入两个字段会被 `autoLogin()` 协程异步覆盖）。发布环境 `.packaging-venv` 的 cp313/cp314 二进制错配已修复（`lxml/Pillow/PyYAML/charset-normalizer/greenlet` 强制重装）。
+
 ## 2. 信息优先级
 
 发生冲突时按以下优先级判断：
@@ -83,8 +100,11 @@ Android 当前使用 `SQLiteOpenHelper` 而非 Room；应用内文档预览与�
 | Canvas 分页与限流 | 已实现 | `v1.0.10` 起已实现（Link 分页、最小间隔、429/`Retry-After`、剩余额度减速、可区分错误类型） | 保持两端一致 |
 | 完整来源爬取 | 文件/目录/模块/页面/作业/公告/大纲 | `v1.0.10` 起已对齐（目录重建 + 模块/页面/作业/公告/大纲的文件引用，正文归档仍仅桌面端） | 保持对齐（正文归档可选） |
 | 可靠增量下载 | `.part`、续传、大小校验、原子替换 | `v1.0.10` 起已实现（`.part` + Range 续传 + 长度校验 + 原子改名 + 同名避让 + 退避重试） | 两端共享同一套安全语义 |
-| 应用内 PDF/Office/图片/文本预览 | 已实现，部分格式有降级 | `v1.0.7` 起：PDF 与 Office（doc/docx/ppt/pptx/xls/xlsx，POI 解析 + Canvas 逐页渲染）均为纵向连续滚动 + 双指/双击缩放；`.doc`/`.docx` 自 `v1.0.8` 起渲染内嵌图片、跨页表格与逐段字符格式（完整页面）；`v1.0.9` 起 PPT 渲染自动形状/连接线箭头/组合形状，图表、SmartArt、OLE 与视频以占位卡加限制说明呈现，大文档（含超大内嵌记录）可解析；图片（含 GIF/HEIF）、文本/CSV（2MiB 上限）已实现；ODF/HTML 仍为结构化降级 | 两端对齐富文本渲染 |
+| 应用内 PDF/Office/图片/文本预览 | 已实现，部分格式有降级 | `v1.0.7` 起：PDF 与 Office（doc/docx/ppt/pptx/xls/xlsx，POI 解析 + Canvas 逐页渲染）均为纵向连续滚动 + 双指/双击缩放；`.doc`/`.docx` 自 `v1.0.8` 起渲染内嵌图片、跨页表格与逐段字符格式（完整页面）；`v1.0.9` 起 PPT 渲染自动形状/连接线箭头/组合形状，图表、SmartArt、OLE 与视频以占位卡加限制说明呈现，大文档（含超大内嵌记录）可解析；图片（含 GIF/HEIF）、文本/CSV（2MiB 上限）已实现；`v1.0.13` 起 HTML 为应用内富文本渲染（TextView + HtmlCompat），ODF 仍为结构化降级 | 两端对齐富文本渲染 |
 | 应用内音视频 | 已实现 | `v1.0.6` 起用 Media3/ExoPlayer 实现：播放/暂停、停止、±10 秒、进度拖动、音量、单曲循环、错误界面 | 保持 |
+| 本地全文搜索 | 已实现（v1.1.0 起）：文件名 + 已抽取正文（PDF/Office/ODF/HTML/文本），CJK unigram+bigram FTS5，Ctrl+K 全局搜索、Ctrl+F 课程内过滤 | 已实现（v1.1.0 起，schema v3）：FTS4（平台 FTS5 支持不一致，故用 FTS4）+ 同一套 CJK 预分词，搜索入口在主界面顶栏，结果点开直达应用内预览 | 双端已对齐 |
+| 作业截止日期/待办 | 已实现（v1.1.0 起）：crawler 采集 `due_at`，`assignments` 表 + 按时间排序的待办对话框与 .ics 导出 | 已实现（v1.1.0 起）：课程列表顶部「最近截止」区（最多 3 项） | 两端同表结构、同字段口径 |
+| 同步变更摘要 | 已实现（v1.1.0 起）：`sync_changes` 表记录文件级 new/updated/removed，通知按课程列文件名，「最近变更」对话框 | 已实现（v1.1.0 起）：同步通知按课程列文件名 | 两端同表结构 |
 | 分享 | 本地文件菜单已实现 | `v1.0.7` 起实装系统 ShareSheet：修复 ApplicationContext 启动崩溃、修正 OOXML MIME | 保持并补充错误处理 |
 | 后台同步 | 托盘定时同步 | WorkManager 周期同步 | 保持可靠、互斥、可观测 |
 
@@ -109,8 +129,9 @@ Android 当前使用 `SQLiteOpenHelper` 而非 Room；应用内文档预览与�
 │   │   ├── canvas_api.py             Canvas API、分页、限流
 │   │   ├── crawler.py                课程内容发现
 │   │   ├── downloader.py             并发、续传、原子下载
-│   │   ├── state.py                  SQLite 状态库
-│   │   ├── sync_engine.py            同步编排与删除保护
+│   │   ├── state.py                  SQLite 状态库（含 files_fts 全文索引）
+│   │   ├── search_index.py           全文搜索：CJK 分词、文本抽取、结果过滤
+│   │   ├── sync_engine.py            同步编排、删除保护与搜索索引回填
 │   │   ├── daemon.py                 定时守护循环
 │   │   └── gui/                      PySide6 界面层
 │   └── tests/                        桌面自动化测试
@@ -175,7 +196,9 @@ cd elearning-sync
 .\.packaging-venv\Scripts\python.exe -m pytest -q -p no:cacheprovider --basetemp="$env:TEMP\fxx-pytest-bt"
 ```
 
-`v1.0.7` 起桌面测试基线为 **68 passed**（含新增 `tests/test_desktop_p1_fixes.py`）。
+`v1.0.7` 起桌面测试基线为 **68 passed**（含新增 `tests/test_desktop_p1_fixes.py`）；`v1.0.13` 起基线为 **80 passed**（新增 `tests/test_desktop_p2_fixes.py` 6 项：设置根目录持久化、`update_config` 键路径拒绝字符串、自启引号结构、原子写入）。`v1.1.0` 开发分支起基线为 **133 passed**（新增 `tests/test_search_index.py` 41 项：CJK 分词器、查询表达式、文本抽取器、FTS 索引读写删、引擎集成回填；`tests/test_search_ui.py` 1 项：搜索对话框与主窗口联动的 offscreen 子进程烟测；`tests/test_deadlines_and_changes.py` 11 项：作业采集与排序、assignments 表整课替换、变更记录与保留窗口、.ics 构造、引擎 new/updated 落库）。
+
+**`.packaging-venv` 二进制错配的排查与修复（2026-09-30 实证）**：该 venv 是 Python **3.14.6**，但 `lxml/Pillow/PyYAML/charset-normalizer/greenlet` 的编译扩展是 **cp313**，导入时报 `cannot import name 'etree' from 'lxml'` / `cannot import name '_imaging' from 'PIL'`。连锁后果是 `python-docx`、`python-pptx`、`odfpy`（Pillow 还影响图片预览降级）全部静默不可导入——所有预览降级路径与 Office 结构化抽取在发布环境里其实一直是坏的，但因为代码做了优雅降级，不跑导入探针根本发现不了。修复方式：`.\.packaging-venv\Scripts\python.exe -m pip install --force-reinstall --no-cache-dir lxml Pillow PyYAML charset-normalizer greenlet`。**以后每轮发布前必须跑导入探针**（`import docx, pptx, PIL.Image, yaml, lxml.etree`），不要假设 venv 里的二进制包与解释器匹配。
 
 ### 5.4 构建 JDK（2026-09-19 起的关键约束）
 
@@ -188,6 +211,8 @@ cd android-app; .\gradlew.bat --offline --console=plain :app:assembleDebug
 ```
 
 Android Studio 里对应设置为：**Settings → Build, Execution, Deployment → Build Tools → Gradle → Gradle JDK → 选择 JDK 21**（`Download JDK…` 也可；**不要**继续用 Android Studio 自带 JBR，否则同样报 25.0.3）。长期方案是把 Android Studio 的 Gradle JDK 固定到 21，或在升级 Gradle/AGP 到支持 JDK 25 的版本后移除该约束。
+
+**JDK 21 的获取（2026-09-30 实证）**：本机 `D:\Program Files\Android\Android Studio\jbr` 只有 JBR 25（不可用），临时目录的 Temurin 21 已被清理。直连可达的有效下载源是 **Microsoft OpenJDK**：`https://aka.ms/download-jdk/microsoft-jdk-21-windows-x64.zip`（~192 MiB，zip，解压即用，`Invoke-WebRequest` 直连 OK）。同日 **Adoptium 的二进制端点**（`api.adoptium.net/v3/binary/...`，会 302 到 GitHub CDN）在本机 TLS 握手失败（`SEC_E_WRONG_PRINCIPAL` / 「未能为 SSL/TLS 安全通道建立信任关系」），下载时注意换源。下载后 `JAVA_HOME` 指向解压目录即可跑 `gradlew.bat`。
 
 **改构建/配置文件必须用补丁工具，不要用 PowerShell 字符串替换**：`Set-Content -NoNewline`（默认 ANSI 编码）会把 `build.gradle.kts` 里的中文注释写坏，表现为 `Unexpected symbol`（`v1.0.11` 开发中真实踩过，整个仓库一度不可构建）。同类文件还有 `settings.gradle.kts`、`gradle.properties`、`.iss`、`.spec`。若要改版本号，用 `apply_patch` 精确改动对应行。
 
@@ -268,7 +293,7 @@ CLI 默认使用当前目录的 `config.yaml`，GUI 可能使用用户数据目�
 
 - 普通设置：应用私有 `SharedPreferences("fudan_sync")`。
 - 密码：Android Keystore + AES-256-GCM 加密后存私有偏好。
-- 数据库：应用私有 `fudan_sync.db`，当前 schema 版本 2（`v1.0.10` 起新增 `files.updated_at` 与 `sync_runs.files_failed`/`error`）。
+- 数据库：应用私有 `fudan_sync.db`，当前 schema **v3**（`v1.0.10` 起新增 `files.updated_at` 与 `sync_runs` 的失败信息；`v1.1.0` 起新增 `files_fts`（FTS4 全文索引）、`assignments`（作业截止日期）与 `sync_changes`（文件级变更摘要）三张**新表**，老数据不动）。
 - 下载：应用专属外部目录 `<external-files>/elearning/`，卸载应用时通常由系统删除。
 
 `v1.0.10` 起 `onUpgrade()` 按版本逐步执行非破坏性迁移（`ALTER TABLE ADD COLUMN`，并对已存在列做幂等判断），`onDowngrade()` 故意不动数据；只有 `oldVersion < 1`（从未发布过的异常状态）才回退到重建。**后续任何 schema 变更都必须沿用这一模式**，不得改回删表重建。
@@ -291,6 +316,15 @@ CLI 默认使用当前目录的 `config.yaml`，GUI 可能使用用户数据目�
 `vendor/`、`build/`、`dist/`、APK/AAB、安装包等生成物不得提交，也不得被当成源码或运行时依赖；但在明确的构建/发布验收中可以只读检查其文件清单、DLL、签名、体积和运行行为。
 
 提交前至少运行 `git status --short` 和 `git diff --check`，并确认 `.gitignore` 仍覆盖上述内容。
+
+### 6.4 持续集成（v1.1.0 起）
+
+`.github/workflows/ci.yml` 在每次 push `main` / PR / 手动触发时跑两个作业：
+
+- **desktop**（windows-latest）：装依赖 → **发布环境导入探针**（`docx/pptx/PIL/yaml/lxml/fitz` + QtMultimedia，正是 §5.1 里 `.packaging-venv` 二进制错配要抓的那类问题）→ `pytest`（`QT_QPA_PLATFORM=offscreen`）。`fitz` 在 CI 上来自 requirements；若换成可选依赖，探针要同步放宽。
+- **android**（ubuntu-latest, JDK 21）：`lintDebug` + `testDebugUnitTest` + `assembleDebug`，SDK 由 `android-actions/setup-android` 提供（`platforms;android-36` + `build-tools;36.0.0`）。**CI 的检出路径是纯 ASCII**，所以 Gradle 单测 worker 的 `@argfile` 中文路径问题（§17 POI 段、§19.2）在 CI 上不存在；本机仍须走 ASCII junction 或模拟器通道。
+
+注意：`assembleDebug` 用默认 debug 签名（`local.properties` 里的 `fudanSign` 只服务 release），CI 不需要签名密钥，也不要在 workflow 里放任何密钥。两端的本机验证流程不变（桌面 §5.1、Android §17.1）；CI 是**防止回归**的下限，不是本机验收的替代。
 
 ## 7. 桌面端架构
 
@@ -334,6 +368,7 @@ load_config
   -> StateStore.upsert_file / 增量判定
   -> Downloader.download_many
   -> StateStore.mark_downloaded / mark_failed
+  -> 全文索引写入（search_index 抽取正文，见 14.1 的 files_fts）
   -> 页面归档与 SyncStats
 ```
 
@@ -383,7 +418,7 @@ PC 和 Android 必须保持同一协议契约：
 6. 表单提交 `/idp/authCenter/authnEngine`，解析 `locationValue` 并完成 CAS ticket 回跳。
 7. 访问 eLearning 首页验证 Canvas 会话并提取 CSRF token。
 
-桌面端接受 `_normandy_session` 或 `_canvas_session`；Android 当前只接受 `_normandy_session`，后续应对齐。认证协议变化时必须同时检查两端，不能只修一个客户端。
+桌面端与 Android 端都同时接受 `_normandy_session` 或 `_canvas_session`（Android 端自 `v1.0.10` 起对齐）。认证协议变化时必须同时检查两端，不能只修一个客户端。
 
 安全红线：
 
@@ -489,21 +524,23 @@ Downloader 只处理同步引擎已经判定需要下载的任务，不能再次
 ### 14.1 桌面 SQLite
 
 - WAL 模式，`synchronous=NORMAL`。
-- 表：`courses`、`files`、`sync_runs`、`kv`。
+- 表：`courses`、`files`、`sync_runs`、`kv`，外加全文索引虚拟表 `files_fts`（v1.1.0 起）。
 - 文件状态：`pending`、`downloaded`、`failed`、`remote_missing`。
 - 每个线程独立 SQLite connection，连接和 cursor 绝不能跨线程传递。
 - 类级写锁串行化写事务。
 - `close()` 只关闭调用线程自己的连接。
+- **全文索引**（v1.1.0 起）：`files_fts` 是 FTS5 虚拟表，列存 CJK unigram+bigram 预分词文本（默认 unicode61 不做中文分词，原样写入会让「计算机」命中不了「计算机体系结构」）。写入只经 `StateStore.upsert_file_index()`；文件行被删除时经 `StateStore.delete_file()`（存储管理器的唯一删除入口，**不得**再跨类调 `_write_lock_cursor`）。搜索范围限已下载文件、排除 `remote_missing`；FTS5 不可用的构建自动降级为文件名 LIKE。索引在下载完成时增量写入，并在每轮同步收尾限量回填老库（每轮 200 个，大库分多轮完成，可被停止信号协作中断）。
 
-`_write_lock_cursor()` 当前异常路径仍会 commit，没有 rollback 分支。新增多语句事务前先修复该上下文管理器，或显式证明操作原子性并补失败测试。
+`_write_lock_cursor()` 的异常路径已实现 rollback（`v1.0.10` 起由 `test_desktop_p1_fixes.py` 锁定）；新增多语句事务时沿用该上下文管理器即可，不要退回裸 commit。
 
 ### 14.2 Android SQLite
 
 - 使用 `SQLiteOpenHelper`，不是 Room。
-- 表：`courses`、`files`、`sync_runs`。
+- 表：`courses`、`files`、`sync_runs`，外加 `files_fts`（FTS4）、`assignments`、`sync_changes`（v1.1.0 起三张新表，schema v3）。
 - Android 字段少于桌面端，状态和增量元数据也不完整。
 - 不允许把桌面数据库文件导入 Android，反之亦然。
-- `v1.0.10` 起增量同时比较 status、size、远端 `updated_at`、本地文件是否存在与长度是否相符；失败状态写回 `failed` 供界面提示与重试；schema v2 迁移为只加列的非破坏性迁移。
+- `v1.0.10` 起增量同时比较 status、size、远端 `updated_at`、本地文件是否存在与长度是否相符；失败状态写回 `failed` 供界面提示与重试；schema v2 迁移为只加列的非破坏性迁移，schema v3 迁移为**纯加表**（`CREATE TABLE IF NOT EXISTS`，不动任何老表）。
+- **全文索引用 FTS4 而非 FTS5**：Android 各版本 SQLite 的 FTS5 可用性与 tokenizer 支持不一致，FTS4 全版本可用。查询构造因此与桌面端不同：FTS4 **不支持前缀 `term*` 通配符**（Android 端 `buildMatchQuery` 不生成星号），也没有 `rank()`（改按文件名排序）。两端共享同一套 CJK unigram+bigram 预分词与同一套结果字段语义。
 
 ## 15. GUI 线程、窗口和资源生命周期
 
@@ -516,7 +553,7 @@ Downloader 只处理同步引擎已经判定需要下载的任务，不能再次
 - 同一时刻只允许一个同步 worker。
 - 停止必须调用 `SyncEngine.stop()` 协作取消，不得使用 `QThread.terminate()`。
 
-当前退出只等待同步线程约 5 秒，阻塞请求超过该时间可能触发 `QThread still running`。后续应设计可靠退出等待和可取消请求，而不是强杀线程。
+`v1.0.13` 起，退出等待覆盖三类 worker（同步、静默登录、交互登录）：`MainWindow._quit()` 先对同步线程协作 `stop()` + `wait(5000)`，再经 `_await_quit_workers()` 有界等待全部 worker，未结束则托盘提示并 2 秒轮询 `_retry_quit`，绝不强杀线程。登录请求有 60 秒超时上限，有界等待必然终止。
 
 ### 15.2 主窗口和布局
 
@@ -609,7 +646,7 @@ Downloader 只处理同步引擎已经判定需要下载的任务，不能再次
 - **内存控制**：文件 > 16 MiB 时渲染宽度降到 1080–1440px；页数 > 60 时页模型整体缩放到 75%；单页长边 > 4096px 时先缩模型再渲染（旧实现直接返回「该页无法渲染」）；内嵌图片 > 2 MiB 先降采样再入库；`PageBitmapCache` 预算改为堆的 1/8（32–96 MiB）。
 - **导航与文案**：`BackHandler` 覆盖预览与文件列表层，课程选中状态上提到 `AppViewModel`（预览返回后仍在原文件列表）；顶栏用列表显示名（Canvas `display_name`）；预览页有跳页 / 回到页首 / 重置缩放，失败页有「用其他应用打开」按钮；设置页新增「关于」。
 
-仍缺：HTML 富文本渲染（当前显示源文本）、Office 图表/SmartArt/OLE 等复杂元素的高保真还原；损坏文件与不支持格式的降级已有插桩测试覆盖（corruptFile_reportsFailureNotCrash、officePreview_corruptShowsErrorPage），音视频 codec 不支持的端到端测试仍缺。
+仍缺：Office 图表/SmartArt/OLE 等复杂元素的高保真还原；损坏文件与不支持格式的降级已有插桩测试覆盖（corruptFile_reportsFailureNotCrash、officePreview_corruptShowsErrorPage），音视频 codec 不支持的端到端测试仍缺。`v1.0.13` 起 HTML 由「显示源文本」升级为**应用内富文本渲染**（`preview/HtmlPreviewScreen.kt`，TextView + `HtmlCompat`；不执行脚本、不加载远程图片，链接由浏览器打开，4 MiB 上限同桌面端），ODF 仍为结构化降级。
 
 **POI 实色两种类型（易错点，已实证）**：POI 的实色既可能返回 `ColorStyle`（主题色/配色变换），也可能返回 `PaintStyle.SolidPaint`（直接 RGB，实现类是 `DrawPaint.SimpleSolidPaint`）。XSLF 的描边色与逐段文字颜色走的是后者：只判断 `paint is ColorStyle` 会让所有 PPT 描边与文字颜色静默丢失（`v1.0.9` 前就是这个缺陷）。`SlideExtractor.paintArgb()` 必须两种都处理。
 
@@ -619,14 +656,19 @@ Downloader 只处理同步引擎已经判定需要下载的任务，不能再次
 
 ### 17.1 设备端插桩测试（`v1.0.10` 实测基线）
 
-2026-09-19 在 API 36.1 模拟器上跑通全部四类插桩测试，**23 个用例全绿**：
+2026-09-19 在 API 36.1 模拟器上跑通全部四类插桩测试，**23 个用例全绿**；`v1.1.0` 起在 `fxx_test_api36` 无头模拟器上跑通全部插桩测试，**32 个用例全绿**（JVM 单测 98 项同轮全绿）：
 
 | 测试类 | 用例数 | 覆盖 |
 |---|---|---|
 | `office.OfficeRendererInstrumentedTest` | 10 | POI 六格式解析 + Canvas 渲染 + 形状/连接线/组合/图表占位卡 + 损坏文件降级 |
 | `office.OfficePreviewUiTest` | 2 | Office 预览页组合（页脚页码、保真度提示卡、损坏文件错误页） |
 | `HomeScreenTest` | 8 | 课程/存储/设置三页、中文状态、学期筛选、导航 |
-| `data.DatabaseMigrationInstrumentedTest` | 3 | 全新安装 schema、v1→v2 迁移保留数据、同步失败信息落库 |
+| `data.DatabaseMigrationInstrumentedTest` | 3 | 全新安装 schema、v1→v2 迁移保留数据、同步失败信息落库；`v1.1.0` 起断言升级至 SCHEMA_VERSION（当前 3） |
+| `data.SearchInstrumentedTest`（v1.1.0 新增） | 9 | 全新安装 schema v3 三张新表、v2→v3 迁移保留数据、FTS4 CJK 子串命中与摘要、删除清理索引、`remote_missing` 排除、未索引积压与回填、作业排序、变更记录与保留窗口 |
+
+**v1.1.0 由插桩测试发现的一个测试夹具竞态（JVM 与设备都能复现，但只有设备端组合状态才稳定触发）**：`HomeScreenTest.settingsTab_showsAccountAndInterval` 注入登录态时把**同一个** `MutableStateFlow` 对象反射赋给 `_loginState` 与 `loginState` 两个字段；`AppViewModel.init` 启动的 `autoLogin()` 协程异步写 `_loginState`（最终 `LoggedOut`），因为字段已被替换成注入对象，`LoggedOut` 覆盖了 `LoggedIn("20260001")`，设置页用户名变成空串。修法：两个字段注入**不同**对象——内部写入落在一个一次性 flow 上，组合读的 `LoggedIn` flow 没有人再写。规则：**反射注入 StateFlow 时不要让被测对象的异步写入能到达注入的只读快照**。
+
+**v1.1.0 起设备端测试的安装陷阱（实测）**：`am instrument` 报 `NoSuchMethodError: No virtual method upsertFileIndex` 且 `DatabaseMigrationInstrumentedTest` 的版本断言「expected:<3> but was:<2>」时，不是代码问题，而是**装了旧 APK**——`gradlew :app:assembleDebugAndroidTest` 只构建测试 APK，不会重建应用 APK。必须先 `:app:assembleDebug` 并 `adb install -r -t` 两个 APK。
 
 **无头模拟器**（本机实测可用的参数组合，缺 `-feature -Vulkan` 会因 SwiftShader 的 Vulkan 设备创建失败而立刻退出）：
 
@@ -748,7 +790,9 @@ $env:JAVA_HOME = "<JDK 17 路径>"
 
 `connectedDebugAndroidTest` 需要 API 26+ 设备/模拟器。
 
-**JVM 单测的路径限制（已实证）**：`testDebugUnitTest` 的测试 worker 是独立 JVM。当项目路径含非 ASCII 字符（本机为 `D:\Projects\学习资料自动收集`）时，Gradle 传递给 worker 的类路径会无法解析项目自身的测试类，报 `ClassNotFoundException: ...OfficeExtractorTest`（注意：直接用 `java -cp "<中文路径>"` 是好的，纯属 Gradle worker 的传递问题；设 `file.encoding`/`sun.jnu.encoding` 无效）。**解决办法**：把项目目录做一个 ASCII 路径的目录联结（junction），在联结路径下跑单测：`cmd /c mklink /J C:\fxs "D:\Projects\学习资料自动收集"`，然后 `cd C:\fxs\android-app` 执行 `gradlew testDebugUnitTest`。编译 APK（`assembleDebug`）不受影响，原路径即可。插桩测试现状（2026-09-19，API 36 模拟器实测）：OfficeRendererInstrumentedTest 9 项 + OfficePreviewUiTest 2 项全部通过（覆盖 pptx/docx/xlsx/xls/ppt 的解析+Canvas 渲染、本机 Office COM 生成的真实 .doc/.docx/.ppt 夹具的表格与图片渲染、损坏文件降级、不支持格式降级、预览界面纵向翻页与错误页）；HomeScreenTest 8 项中 6 项通过，settingsTab_showsAccountAndInterval 与 courseDetail_showsChineseFileStatus 2 项失败——已用 v1.0.6 标签的全新 worktree 同样复现失败，确认为 v1.0.6 既存问题而非 v1.0.7 回归，本周期未修复（超出 v1.0.7 范围）。仍缺认证、分页、数据库迁移、下载完整性、Worker 重试的单元/集成测试。
+**JVM 单测的路径限制（已实证）**：`testDebugUnitTest` 的测试 worker 是独立 JVM。当项目路径含非 ASCII 字符（本机为 `D:\Projects\学习资料自动收集`）时，Gradle 传递给 worker 的类路径会无法解析项目自身的测试类，报 `ClassNotFoundException: ...OfficeExtractorTest`（注意：直接用 `java -cp "<中文路径>"` 是好的，纯属 Gradle worker 的传递问题；设 `file.encoding`/`sun.jnu.encoding` 无效）。**解决办法**：把项目目录做一个 ASCII 路径的目录联结（junction），在联结路径下跑单测：`cmd /c mklink /J C:\fxs "D:\Projects\学习资料自动收集"`，然后 `cd C:\fxs\android-app` 执行 `gradlew testDebugUnitTest`。编译 APK（`assembleDebug`）不受影响，原路径即可。
+
+**JVM 单测基线（`v1.0.13`，2026-09-30 实测）**：`testDebugUnitTest` 共 **81 项全绿**（CanvasApiTest 12、LinkHeaderTest 5、RequestPolicyTest 5、OfficeExtractorTest 11、TextSanitizerTest 6、PageBitmapCacheBudgetTest 2、CourseCrawlerTest 6、DownloadManagerSanitizeTest 6、DownloadPlanTest 15——其中含 v1.0.13 新增的 `.part` 追加/截断语义 2 项、HtmlFileLinksTest 5、SyncPolicyTest 8）。17.1 节记录的 2026-09-19 插桩基线（23 项）之后，`HomeScreenTest` 的 2 个失败（`settingsTab_showsAccountAndInterval` 与 `courseDetail_showsChineseFileStatus`）在 v1.0.10 已修好；认证/分页/数据库迁移/下载完整性的单元测试自 v1.0.10 起已具备（CanvasApiTest / CourseCrawlerTest / DatabaseMigrationInstrumentedTest / DownloadPlanTest），仍缺 Worker 重试与音视频 codec 的自动化覆盖。
 
 ### 19.3 人工发布验收
 
@@ -1315,7 +1359,7 @@ UI 改动完成后必须实际运行并截图检查关键尺寸；仅阅读代�
 ### P0-新：`v1.0.10` 之后仍需验证/补齐
 
 1. ~~Android 端真机/模拟器验收~~ —— `v1.0.10` 已在 API 36.1 模拟器上跑通全部 23 个插桩用例（见 17.1）。仍建议发布前在**真机**（尤其 Android 8/9 老设备与低内存设备）复跑一次 `OfficeRendererInstrumentedTest`。
-2. 桌面端 `v1.0.7` 未打包：`VERSION`/`setup.iss` 已升到 1.0.7，但未执行 PyInstaller + Inno Setup + 签名流程，未产出安装包，也未做 EXE 启动烟测。
+2. ~~桌面端 `v1.0.7` 未打包~~ —— `v1.1.0` 发布时已补齐打包流程（PyInstaller + Inno Setup + EXE 启动烟测 + Release）；此前 v1.0.10～v1.0.13 的桌面改动也随 `v1.1.0` 安装包一并发布。
 3. Android `WorkManager` 只有「保存了密码」时才会真正同步；未保存密码的账号仍只能靠手动同步。
 
 ### P1：高优先级可靠性

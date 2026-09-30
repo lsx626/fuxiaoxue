@@ -37,14 +37,23 @@ object WordExtractor {
     private const val MARGIN_PT = 56f
     private const val EMU_PER_PT = 12700f
 
-    fun extract(file: File, targetWidthPx: Int): FlowDocument {
+    /**
+     * @param downscale 内嵌图片降采样：页模型会让图片原始字节常驻内存，
+     * 含大量照片的讲义会直接撞堆上限（OOX 打不开）。默认不处理，由
+     * OfficeExtractor 注入与 PPT 路径相同的降采样实现。
+     */
+    fun extract(
+        file: File,
+        targetWidthPx: Int,
+        downscale: (ByteArray) -> ByteArray = { it }
+    ): FlowDocument {
         val name = file.name.lowercase()
         val scale = targetWidthPx.toFloat() / A4_W_PT
         // 打开阶段抛出的异常（损坏/加密）交给 OfficeExtractor 报告为「解析失败」。
         return if (name.endsWith(".docx")) {
-            XWPFDocument(file.inputStream()).use { extractX(it, scale) }
+            XWPFDocument(file.inputStream()).use { extractX(it, scale, downscale) }
         } else {
-            HWPFDocument(file.inputStream()).use { extractH(it, scale) }
+            HWPFDocument(file.inputStream()).use { extractH(it, scale, downscale) }
         }
     }
 
@@ -52,12 +61,16 @@ object WordExtractor {
     // .docx
     // ------------------------------------------------------------------
 
-    private fun extractX(doc: XWPFDocument, scale: Float): FlowDocument {
+    private fun extractX(
+        doc: XWPFDocument,
+        scale: Float,
+        downscale: (ByteArray) -> ByteArray
+    ): FlowDocument {
         val blocks = mutableListOf<FlowBlock>()
         // 按正文顺序遍历段落与表格（doc.paragraphs 会丢掉表格在正文中的位置）
         for (element in doc.bodyElements) {
             when (element) {
-                is XWPFParagraph -> appendXParagraph(element, blocks, scale)
+                is XWPFParagraph -> appendXParagraph(element, blocks, scale, downscale)
                 is XWPFTable -> appendXTable(element, blocks, scale)
                 else -> { /* SDT 等结构化块，本次不渲染 */ }
             }
@@ -65,11 +78,16 @@ object WordExtractor {
         return flowDoc(blocks, scale)
     }
 
-    private fun appendXParagraph(para: XWPFParagraph, blocks: MutableList<FlowBlock>, scale: Float) {
+    private fun appendXParagraph(
+        para: XWPFParagraph,
+        blocks: MutableList<FlowBlock>,
+        scale: Float,
+        downscale: (ByteArray) -> ByteArray
+    ) {
         // 内嵌图片：取 run 中的图片，按原始尺寸（EMU->px）输出
         for (pic in runCatching { para.runs.flatMap { it.embeddedPictures } }
             .getOrDefault(emptyList())) {
-            addPicture(pic, blocks, scale)
+            addPicture(pic, blocks, scale, downscale)
         }
         val runs = para.runs.mapNotNull { run ->
             runCatching { convertRun(run, scale) }.getOrNull()
@@ -137,7 +155,12 @@ object WordExtractor {
         return w.map { if (it <= 0f) 1f else it }
     }
 
-    private fun addPicture(pic: XWPFPicture, blocks: MutableList<FlowBlock>, scale: Float) {
+    private fun addPicture(
+        pic: XWPFPicture,
+        blocks: MutableList<FlowBlock>,
+        scale: Float,
+        downscale: (ByteArray) -> ByteArray
+    ) {
         runCatching {
             // XWPFPicture.getWidth()/getDepth() 返回磅（已从 wp:extent 的 EMU 换算），
             // 再按页面缩放因子转成像素
@@ -147,7 +170,8 @@ object WordExtractor {
             val wPx = (wPt * scale).toInt().coerceAtLeast(1)
             val hPx = (hPt * scale).toInt().coerceAtLeast(1)
             val data = pic.pictureData ?: return@runCatching
-            blocks.add(FlowBlock.Picture(data.data, "image/*", wPx, hPx))
+            // 大图先降采样再入模型，避免页模型常驻数百 MB 原始字节
+            blocks.add(FlowBlock.Picture(downscale(data.data), "image/*", wPx, hPx))
         }
     }
 
@@ -176,7 +200,11 @@ object WordExtractor {
     // .doc（HWPF，旧二进制格式）
     // ------------------------------------------------------------------
 
-    private fun extractH(doc: HWPFDocument, scale: Float): FlowDocument {
+    private fun extractH(
+        doc: HWPFDocument,
+        scale: Float,
+        downscale: (ByteArray) -> ByteArray
+    ): FlowDocument {
         val blocks = mutableListOf<FlowBlock>()
         val range: Range = doc.range
         // PicturesTable 在 hwpf.model 包；个别损坏文档构造它可能失败，容错为 null
@@ -218,7 +246,7 @@ object WordExtractor {
                 // 图片运行：hasPicture 判定后抽取，文本部分跳过（占位符字符）
                 if (pics != null && runCatching { pics.hasPicture(cr) }.getOrDefault(false)) {
                     val pic = runCatching { pics.extractPicture(cr, false) }.getOrNull()
-                    if (pic != null) addPictureH(pic, blocks, scale)
+                    if (pic != null) addPictureH(pic, blocks, scale, downscale)
                     continue
                 }
                 val text = runCatching { cr.text() }.getOrNull().orEmpty()
@@ -301,20 +329,27 @@ object WordExtractor {
         return w.map { if (it <= 0f) 1f else it }
     }
 
-    private fun addPictureH(pic: Picture, blocks: MutableList<FlowBlock>, scale: Float) {
+    private fun addPictureH(
+        pic: Picture,
+        blocks: MutableList<FlowBlock>,
+        scale: Float,
+        downscale: (ByteArray) -> ByteArray
+    ) {
         runCatching {
             // Picture.getDxaGoal()/getDyaGoal() 返回 EMU
             val wEmu = pic.dxaGoal
             val hEmu = pic.dyaGoal
             val data = pic.content ?: return@runCatching
             if (data.isEmpty()) return@runCatching
+            // 大图先降采样再入模型（与 .docx 路径一致）
+            val sampled = downscale(data)
             if (wEmu > 0 && hEmu > 0) {
                 val wPx = (wEmu / EMU_PER_PT * scale).toInt().coerceAtLeast(1)
                 val hPx = (hEmu / EMU_PER_PT * scale).toInt().coerceAtLeast(1)
-                blocks.add(FlowBlock.Picture(data, "image/*", wPx, hPx))
+                blocks.add(FlowBlock.Picture(sampled, "image/*", wPx, hPx))
             } else {
                 // 尺寸未知：交给分页器按真实解码尺寸适配
-                blocks.add(FlowBlock.Picture(data, "image/*", 0, 0))
+                blocks.add(FlowBlock.Picture(sampled, "image/*", 0, 0))
             }
         }
     }

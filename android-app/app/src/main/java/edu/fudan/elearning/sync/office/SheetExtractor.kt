@@ -3,6 +3,7 @@ package edu.fudan.elearning.sync.office
 import org.apache.poi.hssf.usermodel.HSSFWorkbook
 import org.apache.poi.ss.usermodel.Cell
 import org.apache.poi.ss.usermodel.CellType
+import org.apache.poi.ss.usermodel.DataFormatter
 import org.apache.poi.ss.usermodel.Font
 import org.apache.poi.ss.usermodel.Sheet
 import org.apache.poi.ss.usermodel.Workbook
@@ -97,11 +98,17 @@ object SheetExtractor {
         targetWidthPx: Int
     ): DocPage {
         val rowH = ROW_H * scale
-        val pageH = ((endRow - startRow) * rowH + rowH).toInt().coerceAtLeast(1)
+        // 本页实际 n = endRow - startRow 行：网格带高度必须是 n * rowH，
+        // 多加一行会让末条横线浮空、页底多出一条无底边的空白带
+        val pageH = ((endRow - startRow) * rowH).toInt().coerceAtLeast(1)
         val pageW = (totalW * scale).toInt().coerceAtLeast(1)
         val items = mutableListOf<PageItem>()
         // 单元格底色/字体需经 Workbook 取 Font；取不到时降级为默认格式
         val wb = runCatching { sheet.workbook }.getOrNull()
+        // 合并区首格 -> 区域映射，避免每个单元格全扫描，并能按区域总宽排版文本
+        val firstCellToRegion: Map<Pair<Int, Int>, CellRangeAddress> = merged.associateBy {
+            it.firstRow to it.firstColumn
+        }
 
         items.add(PageItem.Fill(Rect4(0f, 0f, pageW.toFloat(), pageH.toFloat()), 0xFFFFFFFF))
 
@@ -120,7 +127,15 @@ object SheetExtractor {
                 }
                 if (covered) continue
                 val x = colStartX(colWidths, c) * scale
-                val w = colWidths[c] * scale
+                // 合并区首格的文本按**整个区域**的宽度排版，而不是首列宽度
+                // （否则本来一行的标题被压窄换行、甚至被截断）
+                val region = firstCellToRegion[rowIdx to c]
+                val w = if (region != null) {
+                    (colEndX(colWidths, region.lastColumn) -
+                        colStartX(colWidths, region.firstColumn)) * scale
+                } else {
+                    colWidths[c] * scale
+                }
                 val style = runCatching { cell.cellStyle }.getOrNull()
                 val font = style?.let { s ->
                     runCatching { wb?.getFontAt(s.fontIndexAsInt) }.getOrNull()
@@ -177,29 +192,36 @@ object SheetExtractor {
     private fun colStartX(colWidths: FloatArray, col: Int): Float =
         (0 until col.coerceAtMost(colWidths.size)).sumOf { colWidths[it].toDouble() }.toFloat()
 
-    private fun colEndX(colWidths: FloatArray, col: Int): Float =
-        colStartX(colWidths, (col + 1).coerceAtMost(colWidths.size))
+    private fun colEndX(colWidths: FloatArray, col: Int): Float {
+        // 合并区域可能超出已知列数（colCount 由各行 lastCellNum 求得）：
+        // 超出部分按默认列宽延伸，否则合并区右边框会被画短
+        val extra = (col + 1 - colWidths.size).coerceAtLeast(0)
+        return colStartX(colWidths, col) + extra * MIN_COL_W
+    }
 
+    /**
+     * 取单元格显示文本。
+     *
+     * 关键点：Excel 日期/时间/百分比的存储值是数值 + 格式串，POI 不会自动套格式，
+     * 直接取 numericCellValue 会显示成 `45292` 这样的序列号而非 `2024-01-01`。
+     * 因此 NUMERIC/FORMULA 统一用 [DataFormatter]（按 cellStyle 套格式，但
+     * **不**求值公式——不传 evaluator）。
+     */
     private fun cellText(cell: Cell): String {
         val raw = runCatching {
             when (cell.cellType) {
-                CellType.NUMERIC -> {
-                    val v = cell.numericCellValue
-                    if (v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
-                }
+                CellType.NUMERIC, CellType.FORMULA ->
+                    FORMATTER.formatCellValue(cell)
                 CellType.STRING -> cell.stringCellValue?.trim() ?: ""
                 CellType.BOOLEAN -> cell.booleanCellValue.toString()
-                CellType.FORMULA -> runCatching {
-                    cell.numericCellValue.let { v ->
-                        if (v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
-                    }
-                }.getOrDefault(cell.cellFormula ?: "")
                 else -> ""
             }
         }.getOrDefault("")
         // 单元格里同样可能有控制字符（换行/制表/未转义标记），统一清洗后再绘制
         return TextSanitizer.clean(raw)
     }
+
+    private val FORMATTER = DataFormatter()
 
     /**
      * POI 的 org.apache.poi.ss.usermodel.Color 是空标记接口，实际实例为
@@ -220,9 +242,10 @@ object SheetExtractor {
     }
 
     private fun fontColorArgb(font: Font): Long? = runCatching {
-        when (font) {
-            is org.apache.poi.xssf.usermodel.XSSFFont -> colorArgb(font.getXSSFColor())
-            else -> null
+        // .xls 的字体色需要 HSSFFont.getHSSFColor(workbook) 传入工作簿才能取到
+        // 调色板颜色，这里没有 Workbook 上下文，暂按默认色绘制（保持原行为）
+        (font as? org.apache.poi.xssf.usermodel.XSSFFont)?.let {
+            colorArgb(it.getXSSFColor())
         }
     }.getOrNull()
 

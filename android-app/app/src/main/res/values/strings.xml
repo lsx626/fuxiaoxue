@@ -23,4 +23,15 @@
     <string name="menu_refresh">刷新列表</string>
     <string name="file_retry_hint">可点「重试」重新下载，或稍后同步自动重试</string>
     <string name="file_pending">同步中</string>
+    <string name="html_limitation_note">应用内富文本渲染：不执行脚本，不加载远程图片；链接点击后由浏览器打开。</string>
+    <string name="html_truncated">文件较大（%1$s），仅渲染前 %2$s 内容</string>
+    <string name="upcoming_deadlines_title">最近截止</string>
+    <string name="upcoming_deadlines_empty">暂无带截止时间的作业，同步后自动从课程采集</string>
+    <string name="search_open">搜索文件</string>
+    <string name="search_hint">搜索文件名或内容…</string>
+    <string name="search_back">返回</string>
+    <string name="search_clear">清空</string>
+    <string name="search_record_missing">该文件记录已不存在</string>
+    <string name="recent_changes_title">最近变更</string>
+    <string name="recent_changes_hint">最近几轮同步的文件变化</string>
 </resources>

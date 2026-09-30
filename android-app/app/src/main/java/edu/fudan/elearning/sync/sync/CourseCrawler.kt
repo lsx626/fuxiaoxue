@@ -30,7 +30,9 @@ data class RemoteFileRef(
 data class CrawlOutcome(
     val files: List<RemoteFileRef>,
     val filesListedOk: Boolean,
-    val errors: List<String> = emptyList()
+    val errors: List<String> = emptyList(),
+    /** 作业（带截止日期；供待办视图，v3 起）。 */
+    val assignments: List<edu.fudan.elearning.sync.network.CanvasAssignment> = emptyList()
 )
 
 /**
@@ -110,9 +112,11 @@ class CourseCrawler(
             }
         }
 
-        // 4) 作业（描述正文 + 附件）
+        // 4) 作业（描述正文 + 附件 + 截止日期）
+        val assignmentsList = mutableListOf<edu.fudan.elearning.sync.network.CanvasAssignment>()
         runSource(errors, "assignments") {
             api.getAssignments(courseId).forEach { assignment ->
+                assignmentsList += assignment
                 addReferenced(
                     found, courseId, assignment.description, SOURCE_ASSIGNMENT,
                     "作业: ${assignment.name}"
@@ -146,7 +150,7 @@ class CourseCrawler(
             addReferenced(found, courseId, api.getSyllabus(courseId), SOURCE_SYLLABUS, "课程大纲")
         }
 
-        return CrawlOutcome(found.values.toList(), filesListedOk, errors)
+        return CrawlOutcome(found.values.toList(), filesListedOk, errors, assignmentsList)
     }
 
     /**
