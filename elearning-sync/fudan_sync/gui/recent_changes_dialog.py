@@ -96,7 +96,7 @@ class RecentChangesDialog(QDialog):
             kind = _CHANGE_TEXT.get(change, change)
             color = _CHANGE_COLOR.get(change, TEXT_SECONDARY)
             filename = item.get("filename") or "未知文件"
-            course = item.get("course_name") or f"课程 {item.get('course_id')}"
+            course = clean_course_name(item.get("course_name") or f"课程 {item.get('course_id')}")
             stamp = _relative_time(item.get("occurred_at") or "")
             text = f"[{kind}] {filename}　·　{course}　·　{stamp}"
             list_item = QListWidgetItem(text)

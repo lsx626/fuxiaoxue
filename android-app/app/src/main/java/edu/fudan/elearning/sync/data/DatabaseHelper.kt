@@ -63,6 +63,8 @@ class DatabaseHelper(context: Context) :
         // v3：全文索引、作业截止日期、文件级变更摘要。
         // onCreate 与 onUpgrade 必须同步维护（v1.0.10 的「全新安装首崩」教训）。
         createSearchTables(db)
+        // v4：阅读进度（预览恢复、进度列、未读优先排序）
+        createReadingProgressTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -73,6 +75,7 @@ class DatabaseHelper(context: Context) :
         }
         if (oldVersion < 2) migrateV1ToV2(db)
         if (oldVersion < 3) migrateV2ToV3(db)
+        if (oldVersion < 4) migrateV3ToV4(db)
     }
 
     override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -94,6 +97,29 @@ class DatabaseHelper(context: Context) :
      */
     private fun migrateV2ToV3(db: SQLiteDatabase) {
         createSearchTables(db)
+    }
+
+    /**
+     * v3 -> v4：新增 reading_progress 表（预览恢复位置）。纯加表，不动旧数据。
+     */
+    private fun migrateV3ToV4(db: SQLiteDatabase) {
+        createReadingProgressTable(db)
+    }
+
+    private fun createReadingProgressTable(db: SQLiteDatabase) {
+        // position：页码（0 起）或媒体播放秒，由 is_media 区分
+        runCatching {
+            db.execSQL(
+                """CREATE TABLE IF NOT EXISTS reading_progress (
+                    file_id INTEGER PRIMARY KEY,
+                    course_id INTEGER DEFAULT 0,
+                    position INTEGER DEFAULT 0,
+                    total INTEGER DEFAULT 0,
+                    is_media INTEGER DEFAULT 0,
+                    updated_at TEXT DEFAULT ''
+                )"""
+            )
+        }
     }
 
     private fun createSearchTables(db: SQLiteDatabase) {
@@ -158,8 +184,9 @@ class DatabaseHelper(context: Context) :
          *
          * v2 新增 files.updated_at 与 sync_runs 的失败信息；
          * v3 新增 files_fts（搜索）、assignments（截止日期）、sync_changes（变更摘要），
-         * 全部为**新增表**，老数据不动。
+         * 全部为**新增表**，老数据不动；
+         * v4 新增 reading_progress（阅读进度），同样是纯加表。
          */
-        const val SCHEMA_VERSION = 3
+        const val SCHEMA_VERSION = 4
     }
 }

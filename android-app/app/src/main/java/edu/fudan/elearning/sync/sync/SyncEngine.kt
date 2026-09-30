@@ -107,11 +107,11 @@ class SyncEngine(
     /** 执行一次同步。返回结果统计；失败语义见 [SyncResult]。 */
     suspend fun sync(
         full: Boolean = false,
-        onProgress: (phase: String, done: Int, total: Int, message: String) -> Unit =
-            { _, _, _, _ -> }
+        onProgress: (phase: String, done: Int, total: Int, message: String, bytes: Long) -> Unit =
+            { _, _, _, _, _ -> }
     ): SyncResult {
         val startedAt = now()
-        onProgress("courses", 0, 0, "正在获取课程列表…")
+        onProgress("courses", 0, 0, "正在获取课程列表…", 0L)
 
         val courses = try {
             api.getCourses()
@@ -125,7 +125,10 @@ class SyncEngine(
         repo.upsertCourses(validCourses.map {
             Course(id = it.id, name = it.name, code = it.courseCode, term = it.term?.name ?: "")
         })
-        onProgress("courses", validCourses.size, validCourses.size, "共 ${validCourses.size} 门课程")
+        onProgress(
+            "courses", validCourses.size, validCourses.size,
+            "共 ${validCourses.size} 门课程", 0L
+        )
 
         var filesTotal = 0
         var filesDownloaded = 0
@@ -137,14 +140,17 @@ class SyncEngine(
 
         for ((index, canvasCourse) in validCourses.withIndex()) {
             if (fatal != null) break
-            onProgress("course", index + 1, validCourses.size, "同步课程：${canvasCourse.name}")
+            onProgress(
+                "course", index + 1, validCourses.size,
+                "同步课程：${canvasCourse.name}", 0L
+            )
 
             // 抓取：文件主列表 + 目录树 + 模块 + 页面 + 作业 + 公告 + 大纲
             val outcome = try {
                 CourseCrawler(
                     api = api,
                     onWarning = { warning ->
-                        onProgress("course", index + 1, validCourses.size, warning)
+                        onProgress("course", index + 1, validCourses.size, warning, 0L)
                     },
                     // 已确认未启用的来源不再重复请求（404 既慢又会刷错误提示）
                     skipSources = prefs.disabledSources(canvasCourse.id),
@@ -161,7 +167,7 @@ class SyncEngine(
                 failedCourses += 1
                 onProgress(
                     "course", index + 1, validCourses.size,
-                    "课程「${canvasCourse.name}」文件列表获取失败：${error.message}"
+                    "课程「${canvasCourse.name}」文件列表获取失败：${error.message}", 0L
                 )
                 continue
             }
@@ -171,7 +177,7 @@ class SyncEngine(
                 failedCourses += 1
                 onProgress(
                     "course", index + 1, validCourses.size,
-                    "课程「${canvasCourse.name}」文件列表未取全，本轮不判定远端删除"
+                    "课程「${canvasCourse.name}」文件列表未取全，本轮不判定远端删除", 0L
                 )
                 continue
             }
@@ -192,7 +198,7 @@ class SyncEngine(
                 failedCourses += 1
                 onProgress(
                     "course", index + 1, validCourses.size,
-                    "课程「${canvasCourse.name}」同步失败：${auth.message}"
+                    "课程「${canvasCourse.name}」同步失败：${auth.message}", 0L
                 )
                 continue
             } catch (error: Throwable) {
@@ -200,7 +206,7 @@ class SyncEngine(
                 onProgress(
                     "course", index + 1, validCourses.size,
                     "课程「${canvasCourse.name}」同步失败：" +
-                        "${error.message ?: error.javaClass.simpleName}"
+                        "${error.message ?: error.javaClass.simpleName}", 0L
                 )
                 continue
             }
@@ -216,7 +222,7 @@ class SyncEngine(
         // 失败与取消都不影响本轮同步结果。
         runCatching {
             SearchIndexer.backfill(context, repo) { message ->
-                onProgress("index", 0, 0, message)
+                onProgress("index", 0, 0, message, 0L)
             }
         }
 
@@ -250,7 +256,7 @@ class SyncEngine(
         full: Boolean,
         stats: CourseStats,
         startedAt: String,
-        onProgress: (phase: String, done: Int, total: Int, message: String) -> Unit
+        onProgress: (phase: String, done: Int, total: Int, message: String, bytes: Long) -> Unit
     ) {
         val files = outcome.files
         stats.filesTotal = files.size
@@ -296,7 +302,10 @@ class SyncEngine(
             taken += dest.name
             // 纵深防御：远端目录名不可信，落盘路径必须仍在课程目录内
             if (!isInside(courseDir, dest)) {
-                onProgress("file", stats.filesDownloaded, 0, "跳过越界路径：${dest.absolutePath}")
+                onProgress(
+                    "file", stats.filesDownloaded, tasks.size,
+                    "跳过越界路径：${dest.absolutePath}", stats.bytesDownloaded
+                )
                 continue
             }
 
@@ -312,6 +321,8 @@ class SyncEngine(
 
         // 并发下载（含失败后刷新签名 URL 重试），DB 写入串行，避免多线程写 SQLite
         if (tasks.isNotEmpty()) {
+            // 下载开始前先报一次总数，让界面立刻从「抓取列表」切到「下载 N 个文件」
+            onProgress("file", 0, tasks.size, "开始下载 ${tasks.size} 个文件…", stats.bytesDownloaded)
             val gate = Semaphore(DOWNLOAD_CONCURRENCY)
             val outcomes = coroutineScope {
                 tasks.map { task ->
@@ -349,7 +360,10 @@ class SyncEngine(
                                 change = if (task.previousDownloadedAt.isNullOrEmpty()) "new" else "updated"
                             )
                         }
-                        onProgress("file", stats.filesDownloaded, 0, "下载：${task.displayName}")
+                        onProgress(
+                            "file", stats.filesDownloaded, tasks.size,
+                            "下载：${task.displayName}", stats.bytesDownloaded
+                        )
                     }
                     is DownloadOutcome.Failed -> {
                         stats.filesFailed += 1
@@ -370,8 +384,9 @@ class SyncEngine(
                             )
                         )
                         onProgress(
-                            "file", stats.filesDownloaded, 0,
-                            "失败：${task.displayName}（${download.reason}）"
+                            "file", stats.filesDownloaded, tasks.size,
+                            "失败：${task.displayName}（${download.reason}）",
+                            stats.bytesDownloaded
                         )
                         if (!download.retryable && download.reason.contains("登录")) {
                             throw ApiException.Auth()
@@ -420,7 +435,7 @@ class SyncEngine(
         bytes: Long,
         filesFailed: Int,
         result: SyncResult,
-        onProgress: (String, Int, Int, String) -> Unit
+        onProgress: (String, Int, Int, String, Long) -> Unit
     ): SyncResult {
         runCatching {
             repo.recordRun(
@@ -442,7 +457,7 @@ class SyncEngine(
             result.filesFailed > 0 -> "同步完成，${result.filesFailed} 个文件失败，可再次同步重试"
             else -> "同步完成"
         }
-        onProgress("done", result.filesDownloaded, filesTotal, message)
+        onProgress("done", result.filesDownloaded, filesTotal, message, bytes)
         return result.copy(coursesCount = coursesCount)
     }
 

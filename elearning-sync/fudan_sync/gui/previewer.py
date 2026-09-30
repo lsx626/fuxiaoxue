@@ -22,11 +22,11 @@ from datetime import date, datetime, time
 from itertools import islice
 from pathlib import Path
 from time import monotonic
-from typing import Optional, Sequence
+from typing import List, Optional, Sequence
 from xml.etree import ElementTree as ET
 
 from PySide6.QtCore import QObject, QUrl, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication, QMovie, QPixmap
+from PySide6.QtGui import QGuiApplication, QKeySequence, QMovie, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -749,7 +749,8 @@ class _ImagePreviewWidget(QWidget):
 class DocumentPreviewDialog(QDialog):
     """Preview a local file without leaving the application."""
 
-    def __init__(self, file_path: str, parent=None):
+    def __init__(self, file_path: str, parent=None, course_id: Optional[int] = None,
+                 state_db: Optional[str] = None):
         super().__init__(parent)
         # Preview dialogs are opened repeatedly from the file table.  Without
         # delete-on-close, every accepted/closed dialog remains a hidden child
@@ -759,6 +760,18 @@ class DocumentPreviewDialog(QDialog):
         self._original_file_path = os.path.abspath(file_path)
         self.file_path = self._original_file_path
         self._file_type = _detect_type(self.file_path)
+        # v1.1.2 起：预览带着课程上下文，支持上一/下一文件与阅读进度。
+        # course_id/state_db 为空（如从「最近变更」/外部入口打开）时只退化这两个
+        # 功能，预览本身不受影响。
+        self._course_id = course_id
+        self._state_db = state_db
+        self._file_id: Optional[int] = None
+        self._sibling_paths: List[str] = []
+        self._last_saved_position = -1
+        self._pdf_page = 0
+        self._pdf_fallback_scroll: Optional[QScrollArea] = None
+        self._pdf_fallback_pages: List[tuple] = []
+        self._last_media_save_ms = 0
         self._temp_pdf_path: Optional[str] = None
         self._temp_pdf_dir: Optional[str] = None
         self._pdf_document = None
@@ -829,8 +842,24 @@ class DocumentPreviewDialog(QDialog):
         self.close_btn.setObjectName("primary")
         self.close_btn.setCursor(Qt.PointingHandCursor)
         self.close_btn.clicked.connect(self.accept)
-        button_row.addWidget(self.share_btn)
+        # v1.1.2：预览内直接翻到同一课程的上/下一个文件（像读电子书）
+        self.prev_file_btn = QPushButton("← 上一个")
+        self.prev_file_btn.setToolTip("同一课程的上一个文件（Alt+←）")
+        self.prev_file_btn.setCursor(Qt.PointingHandCursor)
+        self.prev_file_btn.clicked.connect(lambda: self._navigate_sibling(-1))
+        self.next_file_btn = QPushButton("下一个 →")
+        self.next_file_btn.setToolTip("同一课程的下一个文件（Alt+→）")
+        self.next_file_btn.setCursor(Qt.PointingHandCursor)
+        self.next_file_btn.clicked.connect(lambda: self._navigate_sibling(1))
+        button_row.addWidget(self.prev_file_btn)
+        button_row.addWidget(self.next_file_btn)
         button_row.addStretch()
+        button_row.addWidget(self.share_btn)
+        # 另加键盘快捷键（Alt+方向键翻文件）
+        prev_shortcut = QShortcut(QKeySequence("Alt+Left"), self)
+        prev_shortcut.activated.connect(lambda: self._navigate_sibling(-1))
+        next_shortcut = QShortcut(QKeySequence("Alt+Right"), self)
+        next_shortcut.activated.connect(lambda: self._navigate_sibling(1))
         button_row.addWidget(self.open_default_btn)
         button_row.addWidget(self.close_btn)
         layout.addLayout(button_row)
@@ -843,20 +872,31 @@ class DocumentPreviewDialog(QDialog):
         card_layout.setContentsMargins(16, 12, 16, 12)
         info_layout = QVBoxLayout()
         info_layout.setSpacing(2)
-        name_label = QLabel(os.path.basename(self.file_path))
-        name_label.setStyleSheet("font-size: 14px; font-weight: 600;")
-        name_label.setWordWrap(True)
-        try:
-            size_str = format_size(os.path.getsize(self.file_path))
-        except OSError:
-            size_str = "未知大小"
-        type_label = QLabel(f"{self._type_label()}  ·  {size_str}  ·  {os.path.dirname(self.file_path)}")
-        type_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
-        type_label.setWordWrap(True)
-        info_layout.addWidget(name_label)
-        info_layout.addWidget(type_label)
+        self._info_name_label = QLabel(os.path.basename(self.file_path))
+        self._info_name_label.setStyleSheet("font-size: 14px; font-weight: 600;")
+        self._info_name_label.setWordWrap(True)
+        self._info_type_label = QLabel("")
+        self._info_type_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
+        self._info_type_label.setWordWrap(True)
+        self._refresh_info_bar()
+        info_layout.addWidget(self._info_name_label)
+        info_layout.addWidget(self._info_type_label)
         card_layout.addLayout(info_layout, 1)
         return card
+
+    def _refresh_info_bar(self) -> None:
+        """切换文件后更新信息条（v1.1.2）。"""
+        name_label = getattr(self, "_info_name_label", None)
+        if name_label is not None:
+            name_label.setText(os.path.basename(self.file_path))
+        type_label = getattr(self, "_info_type_label", None)
+        if type_label is not None:
+            try:
+                size_str = format_size(os.path.getsize(self.file_path))
+            except OSError:
+                size_str = "未知大小"
+            type_label.setText(
+                f"{self._type_label()}  ·  {size_str}  ·  {os.path.dirname(self.file_path)}")
 
     def _type_label(self) -> str:
         return {
@@ -871,6 +911,9 @@ class DocumentPreviewDialog(QDialog):
         if not os.path.exists(self.file_path):
             self._show_error("文件不存在")
             return
+        # v1.1.2：先用原始路径解析 file_id 与同课程文件清单，
+        # 之后（Office 转换）file_path 会被换成临时 PDF，此时上下文不再变化
+        self._resolve_context()
         try:
             loaders = {
                 "pdf": self._load_pdf_preview,
@@ -883,6 +926,190 @@ class DocumentPreviewDialog(QDialog):
             loaders.get(self._file_type, self._load_unknown_preview)()
         except Exception as exc:  # pylint: disable=broad-except
             self._show_error(f"预览加载失败：{exc}")
+        self._restore_progress()
+
+    # -- 阅读进度与文件切换（v1.1.2） ---------------------------------
+    def _resolve_context(self) -> None:
+        """按原始路径反查 file_id 与同课程可见文件清单。"""
+        self._file_id = None
+        self._sibling_paths = []
+        if not self._state_db:
+            self._update_sibling_buttons()
+            return
+        try:
+            from ..state import StateStore
+            store = StateStore(self._state_db)
+        except Exception:  # pylint: disable=broad-except
+            self._update_sibling_buttons()
+            return
+        try:
+            row = store.file_id_by_path(self._original_file_path)
+            if row:
+                self._file_id = row.get("file_id")
+                if self._course_id is None:
+                    self._course_id = row.get("course_id")
+            if self._course_id is not None:
+                files = store.list_files_by_course(self._course_id)
+                self._sibling_paths = [
+                    f["local_path"] for f in files
+                    if f.get("status") != "remote_missing"
+                    and f.get("local_path") and os.path.exists(f["local_path"])
+                ]
+        except Exception:  # pylint: disable=broad-except
+            pass
+        finally:
+            try:
+                store.close()
+            except Exception:  # pylint: disable=broad-except
+                pass
+        self._update_sibling_buttons()
+
+    def _current_position(self) -> Optional[tuple]:
+        """当前后端的阅读位置：(页/秒, 总量, 是否媒体)。None 表示不记录。"""
+        if self.media_player is not None:
+            try:
+                duration = self.media_player.duration() // 1000
+                return (self.media_player.position() // 1000, duration, True)
+            except Exception:  # pylint: disable=broad-except
+                return None
+        if self._pdf_view is not None:
+            total = 0
+            doc = self._pdf_document
+            if doc is not None:
+                try:
+                    total = doc.pageCount
+                except Exception:  # pylint: disable=broad-except
+                    pass
+            return (self._pdf_page, total, False)
+        if self._pdf_fallback_scroll is not None:
+            return (self._fallback_visible_page(), len(self._pdf_fallback_pages), False)
+        widget = self.preview_area.widget()
+        if widget is not None and hasattr(widget, "verticalScrollBar"):
+            bar = widget.verticalScrollBar()
+            return (bar.value(), bar.maximum(), False)
+        return None
+
+    def _fallback_visible_page(self) -> int:
+        """PyMuPDF 降级链路：视口顶部的页码。"""
+        scroll = self._pdf_fallback_scroll
+        if scroll is None or not self._pdf_fallback_pages:
+            return 0
+        viewport_top = scroll.verticalScrollBar().value()
+        for index, label in self._pdf_fallback_pages:
+            if label.geometry().bottom() >= viewport_top:
+                return index
+        return self._pdf_fallback_pages[-1][0]
+
+    def _save_progress(self, force: bool = False) -> None:
+        if not self._file_id or not self._state_db:
+            return
+        try:
+            info = self._current_position()
+        except Exception:  # pylint: disable=broad-except
+            return
+        if info is None:
+            return
+        position, total, is_media = info
+        if not force and position == self._last_saved_position:
+            return
+        self._last_saved_position = position
+        try:
+            from ..state import StateStore
+            store = StateStore(self._state_db)
+            try:
+                store.set_reading_progress(self._file_id, self._course_id or 0,
+                                           position, total, is_media)
+            finally:
+                store.close()
+        except Exception:  # pylint: disable=broad-except
+            pass
+
+    def _restore_progress(self) -> None:
+        if not self._file_id or not self._state_db:
+            return
+        try:
+            from ..state import StateStore
+            store = StateStore(self._state_db)
+            try:
+                prog = store.get_reading_progress(self._file_id)
+            finally:
+                store.close()
+        except Exception:  # pylint: disable=broad-except
+            return
+        if not prog:
+            return
+        try:
+            position = int(prog.get("position") or 0)
+            total = int(prog.get("total") or 0)
+            is_media = bool(prog.get("is_media"))
+            if position <= 0:
+                return
+            if self.media_player is not None and is_media:
+                self.media_player.setPosition(position * 1000)
+            elif self._pdf_view is not None:
+                target = min(position, max(total - 1, 0))
+                self._pdf_page = target
+                try:
+                    self._pdf_view.pageNavigator().jump(target)
+                except Exception:  # pylint: disable=broad-except
+                    pass
+            elif self._pdf_fallback_scroll is not None:
+                index = min(position, len(self._pdf_fallback_pages) - 1)
+                if 0 <= index < len(self._pdf_fallback_pages):
+                    scroll = self._pdf_fallback_scroll
+                    scroll.ensureWidgetVisible(self._pdf_fallback_pages[index][1])
+            else:
+                widget = self.preview_area.widget()
+                if widget is not None and hasattr(widget, "verticalScrollBar"):
+                    bar = widget.verticalScrollBar()
+                    bar.setValue(min(position, bar.maximum()))
+        except Exception:  # pylint: disable=broad-except
+            pass
+
+    def _navigate_sibling(self, delta: int) -> None:
+        """切换到同课程的上/下一个文件：先存进度，再像首次打开一样重建。"""
+        if not self._sibling_paths or delta == 0:
+            return
+        try:
+            index = self._sibling_paths.index(self._original_file_path)
+        except ValueError:
+            return
+        new_index = index + delta
+        if not 0 <= new_index < len(self._sibling_paths):
+            return
+        self._save_progress(force=True)
+        # 释放当前文件占用的 PDF/媒体/Office 资源，然后重新装填
+        self._cleanup_resources()
+        self._cleaned_up = False
+        self._office_cancel_event = threading.Event()
+        new_path = os.path.abspath(self._sibling_paths[new_index])
+        self._original_file_path = new_path
+        self.file_path = new_path
+        self._file_type = _detect_type(new_path)
+        self._pdf_page = 0
+        self._pdf_view = None
+        self._pdf_document = None
+        self._pdf_fallback_scroll = None
+        self._pdf_fallback_pages = []
+        self._last_saved_position = -1
+        self._last_media_save_ms = 0
+        self._image_widget = None
+        self._office_render_started = False
+        self.setWindowTitle(f"预览 · {os.path.basename(new_path)}")
+        self._refresh_info_bar()
+        self._resolve_context()
+        self._load_preview()
+
+    def _update_sibling_buttons(self) -> None:
+        enabled = len(self._sibling_paths) > 1
+        if getattr(self, "prev_file_btn", None) is not None:
+            self.prev_file_btn.setEnabled(enabled)
+            self.next_file_btn.setEnabled(enabled)
+            if enabled:
+                self.prev_file_btn.setToolTip(
+                    f"同一课程的上一个文件（Alt+←）· 共 {len(self._sibling_paths)} 个")
+                self.next_file_btn.setToolTip(
+                    f"同一课程的下一个文件（Alt+→）· 共 {len(self._sibling_paths)} 个")
 
     def _set_preview_widget(self, widget: QWidget) -> None:
         # QScrollArea owns its current widget and destroys it when setWidget()
@@ -906,26 +1133,82 @@ class DocumentPreviewDialog(QDialog):
             pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
             self._pdf_document = pdf_doc
             self._pdf_view = pdf_view
+            # v1.1.2：页码变化时记录阅读进度（翻页即存，关闭时强制再存一次）
+            try:
+                pdf_view.currentPageChanged.connect(self._on_pdf_page_changed)
+            except AttributeError:
+                # 极少数 Qt 构建没有该信号：退化为关闭时读取导航器当前页
+                pass
             self._set_preview_widget(pdf_view)
         except Exception:
             self._load_pdf_fallback(path)
 
+    def _on_pdf_page_changed(self, page: int) -> None:
+        self._pdf_page = max(0, int(page))
+        self._save_progress()
+
     def _load_pdf_fallback(self, path: Optional[str] = None) -> None:
+        """PyMuPDF 降级：渲染全部页面（纵向连续滚动，与 Android 链路观感一致）。
+
+        v1.1.2 前只渲染第一页，长文档基本不可读。超大 PDF 出于内存安全限制
+        首批渲染 30 页，并在页脚如实标注总页数。
+        """
         path = path or self.file_path
         try:
             import fitz  # type: ignore
-            with fitz.open(path) as doc:
-                if doc.page_count:
-                    pix = doc[0].get_pixmap(dpi=150)
-                    image = QPixmap()
-                    if image.loadFromData(pix.tobytes("png")):
-                        self._show_image_preview(image)
-                        return
         except ImportError:
-            pass
+            self._show_unsupported_card(
+                "PDF 预览组件不可用",
+                "当前环境缺少 PDF 渲染组件，您可以使用系统默认应用打开此文件。")
+            return
+        try:
+            with fitz.open(path) as doc:
+                page_count = doc.page_count
+                if not page_count:
+                    raise RuntimeError("PDF 没有任何页面")
+                render_limit = min(page_count, 30)
+                container = QWidget()
+                layout = QVBoxLayout(container)
+                layout.setContentsMargins(0, 0, 0, 0)
+                layout.setSpacing(14)
+                labels: List[tuple] = []
+                for index in range(render_limit):
+                    pix = doc[index].get_pixmap(dpi=150)
+                    image = QPixmap()
+                    if not image.loadFromData(pix.tobytes("png")):
+                        continue
+                    page_label = QLabel()
+                    page_label.setPixmap(image)
+                    page_label.setAlignment(Qt.AlignCenter)
+                    layout.addWidget(page_label)
+                    labels.append((index, page_label))
+                    footer = QLabel(f"第 {index + 1} / {page_count} 页")
+                    footer.setAlignment(Qt.AlignCenter)
+                    footer.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
+                    layout.addWidget(footer)
+                if page_count > render_limit:
+                    note = QLabel(
+                        f"为控制内存占用，此处渲染前 {render_limit} 页；"
+                        f"PDF 共 {page_count} 页，可「在默认应用打开」查看完整内容。")
+                    note.setWordWrap(True)
+                    note.setAlignment(Qt.AlignCenter)
+                    note.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px; padding: 12px;")
+                    layout.addWidget(note)
+                layout.addStretch()
+                scroll = QScrollArea()
+                scroll.setWidgetResizable(True)
+                scroll.setFrameShape(QFrame.NoFrame)
+                scroll.setStyleSheet(
+                    f"QScrollArea {{ background: {CARD}; border: 1px solid {BORDER};"
+                    f" border-radius: 12px; }}")
+                scroll.setWidget(container)
+                self._pdf_fallback_scroll = scroll
+                self._pdf_fallback_pages = labels
+                self._set_preview_widget(scroll)
         except Exception:  # pylint: disable=broad-except
-            pass
-        self._show_unsupported_card("PDF 预览组件不可用", "当前环境缺少 PDF 渲染组件，您可以使用系统默认应用打开此文件。")
+            self._show_unsupported_card(
+                "PDF 预览组件不可用",
+                "当前环境缺少 PDF 渲染组件，您可以使用系统默认应用打开此文件。")
 
     # -- images -------------------------------------------------------
     def _load_image_preview(self) -> None:
@@ -1203,6 +1486,8 @@ class DocumentPreviewDialog(QDialog):
             self._temp_pdf_dir = output_dir
             self.file_path = output_path
             self._load_pdf_preview(output_path)
+            # v1.1.2：异步转换重建了 PDF 视图，此时再恢复一次阅读位置
+            self._restore_progress()
             return
         if output_dir:
             shutil.rmtree(output_dir, ignore_errors=True)
@@ -1573,6 +1858,10 @@ class DocumentPreviewDialog(QDialog):
             self.position_slider.setValue(position)
         if self.time_label is not None and self.media_player is not None:
             self.time_label.setText(f"{_format_time(position)} / {_format_time(self.media_player.duration())}")
+        # v1.1.2：每 2 秒落一次进度（关闭时 _cleanup_resources 会强制再存一次）
+        if abs(position - self._last_media_save_ms) >= 2000:
+            self._last_media_save_ms = position
+            self._save_progress()
 
     def _on_media_duration(self, duration: int) -> None:
         if self.position_slider is not None:
@@ -1679,6 +1968,11 @@ class DocumentPreviewDialog(QDialog):
             self._office_cancel_event.set()
             pending_office_dirs = tuple(self._pending_office_dirs)
             self._pending_office_dirs.clear()
+        # v1.1.2：释放媒体/PDF 句柄之前把阅读位置落库（此时 position() 仍有效）
+        try:
+            self._save_progress(force=True)
+        except Exception:  # pylint: disable=broad-except
+            pass
         if self.media_player is not None:
             try:
                 self.media_player.stop()

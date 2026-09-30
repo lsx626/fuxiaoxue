@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QHBoxLayout, QLabel,
                                QVBoxLayout, QWidget)
 
 from ..state import StateStore
-from ..utils import format_size
+from ..utils import clean_course_name, format_size
 from .styles import (ACCENT, CARD, TEXT, TEXT_SECONDARY)
 
 _DEBOUNCE_MS = 250
@@ -133,7 +133,8 @@ class SearchDialog(QDialog):
         self.result_list.clear()
         for hit in self._results:
             title = hit.get("display_name") or hit.get("filename") or "未知文件"
-            course = hit.get("course_name") or f"课程 {hit.get('course_id')}"
+            course = clean_course_name(
+                hit.get("course_name") or f"课程 {hit.get('course_id')}")
             size = format_size(hit.get("size") or 0)
             snippet = hit.get("snippet")
             first = f"{title}　·　{course}　·　{size}"

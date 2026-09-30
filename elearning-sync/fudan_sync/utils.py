@@ -95,6 +95,24 @@ def format_size(num_bytes: float) -> str:
     return f"{size:.1f} TB"
 
 
+def clean_course_name(raw: str) -> str:
+    """从 Canvas 课程名中剥离内嵌的选课代码（纯展示用，不改数据库）。
+
+    复旦课程名常内嵌选课代码，如「数据处理与数据库 DATA130012.01」或
+    「DATA130012.01 数据处理与数据库」；剥掉代码与残留的空括号/破折号。
+    清洗结果为空时退回原名裁剪，避免界面显示空白。
+    """
+    if not raw:
+        return raw
+    code = r"[A-Z]{2,6}\d{5,6}(?:\.\d{1,2})?"
+    # 1)「（CODE）」式：整对括号一起去（括号本身可能是名字的一部分，如「普通化学A（上）」）
+    name = re.sub(rf"[（(]\s*{code}\s*[）)]", " ", raw)
+    # 2) 裸代码：连同两侧空白一起吞掉
+    name = re.sub(rf"\s*{code}\s*", " ", name)
+    name = re.sub(r"\s+", " ", name).strip()
+    return name or raw.strip()
+
+
 def parse_iso8601(value: str | None) -> str | None:
     """统一 ISO8601 时间格式（去掉毫秒/时区差异），失败则原样返回。"""
     if not value:

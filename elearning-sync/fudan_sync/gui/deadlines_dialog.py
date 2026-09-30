@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QLabel,
                                QVBoxLayout, QWidget)
 
 from ..state import StateStore
-from ..utils import format_size  # noqa: F401  （保持与其他对话框一致的导入习惯）
+from ..utils import clean_course_name, format_size  # noqa: F401  （保持与其他对话框一致的导入习惯）
 from .styles import (ACCENT, CARD, DANGER, SUCCESS, TEXT, TEXT_SECONDARY, WARNING)
 
 
@@ -96,7 +96,7 @@ class DeadlinesDialog(QDialog):
         for item in self._assignments:
             due = _parse_due(item.get("due_at") or "")
             name = item.get("name") or "未命名作业"
-            course = item.get("course_name") or f"课程 {item.get('course_id')}"
+            course = clean_course_name(item.get("course_name") or f"课程 {item.get('course_id')}")
             if due is None:
                 text = f"{name}　·　{course}　·　（无截止时间）"
                 color = TEXT_SECONDARY

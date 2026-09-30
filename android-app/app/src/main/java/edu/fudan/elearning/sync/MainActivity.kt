@@ -58,7 +58,13 @@ class MainActivity : ComponentActivity() {
                             edu.fudan.elearning.sync.util.FileUtils.shareFile(
                                 applicationContext, file
                             )
-                        }
+                        },
+                        siblingCount = preview.siblings.size,
+                        onNavigateSibling = viewModel::navigatePreviewSibling,
+                        initialPage = preview.initialPage,
+                        onPageChanged = viewModel::reportReadingPage,
+                        initialMediaSec = preview.initialMediaSec,
+                        onMediaPositionChanged = viewModel::reportReadingMediaSec
                     )
                     searchOpen -> SearchScreen(viewModel)
                     else -> when (val state = loginState) {

@@ -28,7 +28,11 @@ import java.io.File
  * 全程复用一份 [PdfRenderer] 实例渲染所有页，位图由 [PageBitmapCache] 按需缓存。
  */
 @Composable
-fun PdfPreviewScreen(file: File) {
+fun PdfPreviewScreen(
+    file: File,
+    initialPage: Int = -1,
+    onPageChanged: (page: Int, total: Int) -> Unit = { _, _ -> }
+) {
     var loadState by remember(file.absolutePath) { mutableStateOf<PdfLoadState>(PdfLoadState.Loading) }
     var source by remember(file.absolutePath) { mutableStateOf<PdfPageSource?>(null) }
 
@@ -79,7 +83,9 @@ fun PdfPreviewScreen(file: File) {
                 VerticalPageList(
                     pageCount = s.pageCount,
                     aspectOf = { src.aspectOf(it) },
-                    renderPage = { src.renderPage(it) }
+                    renderPage = { src.renderPage(it) },
+                    initialPage = initialPage,
+                    onPageChanged = onPageChanged
                 )
             }
         }

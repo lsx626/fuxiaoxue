@@ -65,7 +65,22 @@ class DatabaseMigrationInstrumentedTest {
         assertTrue(runColumns.contains("files_failed"))
         assertTrue(runColumns.contains("error"))
         assertEquals(DatabaseHelper.SCHEMA_VERSION, db.version)
+        // v4：阅读进度表必须在全新安装时就存在（onCreate 与 onUpgrade 同步维护）
+        assertTrue(
+            "reading_progress 必须在全新安装时建出",
+            tables(db).contains("reading_progress")
+        )
         helper.close()
+    }
+
+    private fun tables(db: SQLiteDatabase): Set<String> {
+        val names = mutableSetOf<String>()
+        db.rawQuery(
+            "SELECT name FROM sqlite_master WHERE type IN ('table','view')", null
+        ).use { cursor ->
+            while (cursor.moveToNext()) names.add(cursor.getString(0))
+        }
+        return names
     }
 
     @Test
@@ -135,6 +150,55 @@ class DatabaseMigrationInstrumentedTest {
         )
         val saved = repo.getFile(11)
         assertEquals("2026-09-19T10:00:00Z", saved?.updatedAt)
+        repo.close()
+        helper.close()
+    }
+
+    @Test
+    fun upgradeFromV3_addsReadingProgressAndKeepsData() {
+        // 手工造一个 v3 库：v3 的三张表 + 用户数据
+        val legacy = SQLiteDatabase.openOrCreateDatabase(dbFile, null)
+        legacy.execSQL(
+            """CREATE TABLE courses (
+                id INTEGER PRIMARY KEY, name TEXT NOT NULL, code TEXT DEFAULT '',
+                term TEXT DEFAULT '', last_synced_at TEXT
+            )"""
+        )
+        legacy.execSQL(
+            """CREATE TABLE files (
+                file_id INTEGER PRIMARY KEY, course_id INTEGER NOT NULL, name TEXT NOT NULL,
+                filename TEXT DEFAULT '', folder_path TEXT DEFAULT '', local_path TEXT DEFAULT '',
+                size INTEGER DEFAULT 0, status TEXT DEFAULT 'pending', downloaded_at TEXT,
+                url TEXT DEFAULT '', updated_at TEXT DEFAULT ''
+            )"""
+        )
+        legacy.execSQL("INSERT INTO courses (id, name, code, term) VALUES (1, '机器学习', 'CS229', '2025秋')")
+        legacy.execSQL(
+            """INSERT INTO files (file_id, course_id, name, filename, status, updated_at)
+               VALUES (10, 1, '旧讲义.pdf', '旧讲义.pdf', 'downloaded', 't1')"""
+        )
+        legacy.version = 3
+        legacy.close()
+
+        // 用当前 helper 打开：触发 v3 -> v4 迁移
+        val helper = DatabaseHelper(context)
+        val db = helper.writableDatabase
+        assertEquals(4, db.version)
+        assertTrue(tables(db).contains("reading_progress"))
+
+        // 用户数据原样保留
+        db.rawQuery("SELECT name, status FROM files WHERE file_id=10", null).use { c ->
+            assertTrue("旧文件记录必须保留", c.moveToFirst())
+            assertEquals("旧讲义.pdf", c.getString(0))
+        }
+
+        // 迁移后可以直接读写进度（Repo 的真实路径）
+        val repo = Repo(context)
+        repo.setReadingProgress(10, 1, 7, 30, false)
+        val prog = repo.getReadingProgress(10)
+        assertEquals(7, prog?.position)
+        assertEquals(30, prog?.total)
+        assertEquals(false, prog?.isMedia)
         repo.close()
         helper.close()
     }

@@ -235,6 +235,59 @@ class SearchInstrumentedTest {
     }
 
     @Test
+    fun assignmentsCarryCourseName() {
+        val helper = DatabaseHelper(context)
+        val repo = Repo(context)
+        repo.upsertCourses(
+            listOf(Course(id = 1, name = "机器学习导论 DATA130012.01", code = "DATA130012.01", term = "2026秋"))
+        )
+        repo.upsertAssignments(
+            1, listOf(Assignment(id = 1, courseId = 1, name = "作业一", dueAt = "2026-10-05T23:59:00Z"))
+        )
+        val list = repo.assignments()
+        assertEquals(1, list.size)
+        // LEFT JOIN courses：界面「最近截止」栏要标注每项属于哪门课
+        assertEquals("机器学习导论 DATA130012.01", list[0].courseName)
+        repo.close()
+        helper.close()
+    }
+
+    @Test
+    fun visibleFilesAndStats_hideRemoteMissing() {
+        val helper = DatabaseHelper(context)
+        val repo = Repo(context)
+        repo.upsertCourses(listOf(Course(id = 1, name = "机器学习导论", code = "CS229", term = "2025秋")))
+        repo.upsertFile(
+            FileItem(fileId = 100, courseId = 1, name = "lec1.txt", filename = "lec1.txt",
+                localPath = "/tmp/lec1.txt", size = 30, status = "downloaded")
+        )
+        repo.upsertFile(
+            FileItem(fileId = 101, courseId = 1, name = "lec2.txt", filename = "lec2.txt",
+                localPath = "/tmp/lec2.txt", size = 30, status = "remote_missing")
+        )
+        repo.upsertFile(
+            FileItem(fileId = 102, courseId = 1, name = "lec3.txt", filename = "lec3.txt",
+                localPath = "/tmp/lec3.txt", size = 30, status = "failed")
+        )
+
+        // 界面列表：远端已删除的不返回
+        val visible = repo.getVisibleFilesByCourse(1)
+        assertEquals(2, visible.size)
+        assertFalse(visible.any { it.status == "remote_missing" })
+
+        // 引擎增量判定仍需要 remote_missing 行，不能被隐藏掉
+        assertEquals(3, repo.getFilesByCourse(1).size)
+
+        // 课程统计与可见列表口径一致（ otherwise 「N 个文件」与列表行数对不上）
+        val stats = repo.courseStats()
+        assertEquals(1, stats.size)
+        assertEquals(2, stats[0].filesTotal)
+        assertEquals(1, stats[0].filesDone)
+        repo.close()
+        helper.close()
+    }
+
+    @Test
     fun changesRecordedAndTrimmed() {
         val helper = DatabaseHelper(context)
         val repo = Repo(context)

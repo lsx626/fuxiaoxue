@@ -673,6 +673,8 @@ class StorageManagerDialog(QDialog):
             # 从数据库删除记录（同时清搜索索引）
             try:
                 self.store.delete_file(file_id)
+                # v1.1.2：阅读进度同步清理，避免残留指向已删文件
+                self.store.clear_reading_progress(file_id)
                 deleted_count += 1
             except Exception:  # pylint: disable=broad-except
                 pass

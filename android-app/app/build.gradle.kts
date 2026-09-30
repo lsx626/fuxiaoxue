@@ -14,8 +14,8 @@ android {
         applicationId = "edu.fudan.elearning.sync"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "1.1.0"
+        versionCode = 16
+        versionName = "1.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // POI 方法数较多，需要 multidex
         multiDexEnabled = true

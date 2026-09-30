@@ -41,7 +41,12 @@ import java.io.File
  * 都以它为准，避免显示磁盘上可能被百分号编码的落盘名。
  */
 @Composable
-fun OfficePreviewScreen(file: File, displayName: String = file.name) {
+fun OfficePreviewScreen(
+    file: File,
+    displayName: String = file.name,
+    initialPage: Int = -1,
+    onPageChanged: (page: Int, total: Int) -> Unit = { _, _ -> }
+) {
     val title = remember(displayName, file.name) { displayName.ifBlank { file.name } }
     var result by remember(file.absolutePath) { mutableStateOf<OfficeParseResult?>(null) }
     // 解析进度：(已完成, 总数)；解析器运行在 IO 线程，用 StateFlow 传递避免跨线程写状态
@@ -82,7 +87,9 @@ fun OfficePreviewScreen(file: File, displayName: String = file.name) {
                     if (p.heightPx > 0) p.widthPx.toFloat() / p.heightPx else 0.75f
                 },
                 renderPage = { index -> renderOfficePage(pages, index) },
-                header = { OfficeLimitationNote(title) }
+                header = { OfficeLimitationNote(title) },
+                initialPage = initialPage,
+                onPageChanged = onPageChanged
             )
         }
         is OfficeParseResult.Empty -> PreviewError(r.reason, title = "没有可显示的内容")

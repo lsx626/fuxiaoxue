@@ -1,7 +1,6 @@
 package edu.fudan.elearning.sync.preview
 
 import android.graphics.Bitmap
-import android.util.LruCache
 import edu.fudan.elearning.sync.R
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -17,13 +16,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,12 +30,17 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -50,11 +54,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -63,12 +66,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 统一的「纵向连续滚动」页面列表（下拉式漫画阅读体验）：PDF、Office 共用。
+ * 统一的「纵向连续滚动」页面列表（下拉式阅读体验）：PDF、Office 共用。
  *
  * - 每页一个 LazyColumn 条目，进入可视区时才在 IO 线程渲染位图；
  * - 位图走 [PageBitmapCache]（按字节数预算的 LRU），当前展示中的页被钉住不会被回收；
- * - 每页支持双指缩放（1x~[maxZoom]）与双击切换 1x/2x；缩放为 1x 时不消费单指手势，
- *   由外层 LazyColumn 处理纵向滚动，从而避免缩放与滚动手势冲突；
+ * - 缩放状态上提到列表级（按页号记忆）：双指缩放（1x~[maxZoom]）、双击以**点击点为锚点**
+ *   在 1x/2x 间切换，底部控制条还提供 ± 按钮与百分比，缩放不再只靠手势；
+ * - 底部常驻控制条：跳页 / 回页首 / 缩放 / 重置——滚动时也不会消失；
  * - 页脚显示「第 N / M 页」。
  */
 @Composable
@@ -81,7 +85,11 @@ fun VerticalPageList(
     modifier: Modifier = Modifier,
     maxZoom: Float = 4f,
     /** 列表顶部额外内容（如保真度说明卡），可为空。 */
-    header: (@Composable () -> Unit)? = null
+    header: (@Composable () -> Unit)? = null,
+    /** v1.1.2：打开时恢复到的页码（-1 不恢复）。 */
+    initialPage: Int = -1,
+    /** v1.1.2：主显示页变化时回调（ViewModel 落库阅读进度）。 */
+    onPageChanged: (page: Int, total: Int) -> Unit = { _, _ -> }
 ) {
     if (pageCount <= 0) {
         Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -93,78 +101,152 @@ fun VerticalPageList(
     val cache = remember { PageBitmapCache() }
     val scope = rememberCoroutineScope()
     var showJumpDialog by remember { mutableStateOf(false) }
-    // 全局缩放置位：递增后各页恢复 1x 并清除平移
-    var zoomResetToken by remember { mutableStateOf(0) }
-    // LazyColumn 在页条目之前还有固定条目：可选的 header + 控制按钮行。
-    // 跳到第 N 页必须跳过这些固定条目，否则少算 1~2 项。
-    val fixedItemCount = (if (header != null) 1 else 0) + 1
 
-    LazyColumn(
-        state = listState,
-        modifier = modifier.fillMaxSize().background(Color(0xFFEDEEF2)),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)
-    ) {
-        if (header != null) {
-            item { header() }
+    // 列表级缩放状态：页号 -> 倍率 / 平移。手势与按钮都写这两张表，
+    // 列表保留各自的缩放（历史缺陷：滚到下一页缩放丢失，只能重新捏）。
+    val zoomScales = remember { mutableStateMapOf<Int, Float>() }
+    val zoomOffsets = remember { mutableStateMapOf<Int, Offset>() }
+
+    // 当前主显示页（可见度最高的页条目）：± 缩放按钮作用于它
+    val currentPage by remember {
+        derivedStateOf {
+            listState.layoutInfo.visibleItemsInfo
+                .filter { it.key is Int }
+                .maxByOrNull { it.size - kotlin.math.abs(it.offset) }
+                ?.key as? Int ?: 0
         }
-        item {
+    }
+
+    // LazyColumn 在页条目之前还有固定条目：可选的 header（跳页/恢复都要算上偏移）
+    val headerOffset = if (header != null) 1 else 0
+
+    // v1.1.2：进入时恢复到上次阅读的页（header 偏移量一并计算）
+    LaunchedEffect(pageCount, initialPage) {
+        if (initialPage in 0 until pageCount) {
+            // 等首帧布局完成，否则 scrollToItem 算不出位置
+            listState.scrollToItem(headerOffset + initialPage)
+        }
+    }
+
+    // v1.1.2：主显示页变化时上报（500ms 防抖，快速连续滑动只落一次库）
+    LaunchedEffect(currentPage, pageCount) {
+        if (pageCount > 0) {
+            kotlinx.coroutines.delay(500)
+            onPageChanged(currentPage, pageCount)
+        }
+    }
+
+    Column(modifier.fillMaxSize().background(Color(0xFFEDEEF2))) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)
+        ) {
+            if (header != null) {
+                item { header() }
+            }
+            items((0 until pageCount).toList(), key = { it }) { page ->
+                PageRow(
+                    pageIndex = page,
+                    totalPages = pageCount,
+                    aspect = aspectOf(page),
+                    cache = cache,
+                    renderPage = renderPage,
+                    maxZoom = maxZoom,
+                    zoomScales = zoomScales,
+                    zoomOffsets = zoomOffsets,
+                    onPageIndicatorClick = { showJumpDialog = true }
+                )
+            }
+        }
+        // 底部常驻控制条：旧版在列表顶部、一滚动就消失（「不好用」的根因）
+        Surface(
+            Modifier.fillMaxWidth(),
+            shadowElevation = 3.dp,
+            color = MaterialTheme.colorScheme.surfaceContainer
+        ) {
             Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
+                Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 TextButton(onClick = { showJumpDialog = true }) {
                     Text(stringResource(R.string.preview_jump_button))
                 }
-                Spacer(Modifier.width(12.dp))
                 TextButton(onClick = {
                     scope.launch { listState.scrollToItem(0) }
                 }) {
                     Text(stringResource(R.string.preview_back_top))
                 }
-                Spacer(Modifier.width(12.dp))
-                TextButton(onClick = { zoomResetToken += 1 }) {
+                // 缩放按钮组：对当前主显示页 +-，倍率即时可读
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        enabled = (zoomScales[currentPage] ?: 1f) > 1f,
+                        onClick = { zoomStep(currentPage, -0.25f, zoomScales, zoomOffsets, maxZoom) }
+                    ) { Text("−", fontWeight = FontWeight.Bold) }
+                    Text(
+                        "${((zoomScales[currentPage] ?: 1f) * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Medium
+                    )
+                    TextButton(
+                        enabled = (zoomScales[currentPage] ?: 1f) < maxZoom,
+                        onClick = { zoomStep(currentPage, 0.25f, zoomScales, zoomOffsets, maxZoom) }
+                    ) { Text("+", fontWeight = FontWeight.Bold) }
+                }
+                TextButton(onClick = {
+                    zoomScales.clear()
+                    zoomOffsets.clear()
+                }) {
                     Text(stringResource(R.string.preview_zoom_reset))
                 }
             }
-        }
-        items((0 until pageCount).toList(), key = { it }) { page ->
-            PageRow(
-                pageIndex = page,
-                totalPages = pageCount,
-                aspect = aspectOf(page),
-                cache = cache,
-                renderPage = renderPage,
-                maxZoom = maxZoom,
-                zoomResetToken = zoomResetToken,
-                onPageIndicatorClick = { showJumpDialog = true }
-            )
         }
     }
 
     if (showJumpDialog) {
         var pageText by remember { mutableStateOf("") }
+        // 滑杆与输入框共享状态：输入数字时滑杆跟随，确认时优先取输入框
+        var sliderValue by remember(pageCount) {
+            mutableFloatStateOf(1f)
+        }
         AlertDialog(
             onDismissRequest = { showJumpDialog = false },
             title = { Text(stringResource(R.string.preview_jump_page, pageCount)) },
             text = {
-                OutlinedTextField(
-                    value = pageText,
-                    onValueChange = { pageText = it.filter { ch -> ch.isDigit() } },
-                    label = { Text(stringResource(R.string.preview_jump_hint)) },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true
-                )
+                Column {
+                    OutlinedTextField(
+                        value = pageText,
+                        onValueChange = { newText ->
+                            pageText = newText.filter { ch -> ch.isDigit() }
+                            pageText.toIntOrNull()?.let {
+                                sliderValue = it.coerceIn(1, pageCount).toFloat()
+                            }
+                        },
+                        label = { Text(stringResource(R.string.preview_jump_hint)) },
+                        singleLine = true
+                    )
+                    Spacer(Modifier.size(8.dp))
+                    Slider(
+                        value = sliderValue,
+                        onValueChange = { sliderValue = it },
+                        valueRange = 1f..pageCount.toFloat(),
+                        steps = 0
+                    )
+                    Text(
+                        "第 ${sliderValue.toInt()} 页 / 共 $pageCount 页",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                    )
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
-                    val page = pageText.toIntOrNull()
-                    if (page != null && page in 1..pageCount) {
-                        // 列表前有固定条目（header + 控制行），页码必须换算成列表索引
-                        scope.launch { listState.scrollToItem(fixedItemCount + page - 1) }
-                        showJumpDialog = false
-                    }
+                    val page = (pageText.toIntOrNull() ?: sliderValue.toInt())
+                        .coerceIn(1, pageCount)
+                    scope.launch { listState.scrollToItem(0 + page - 1) }
+                    showJumpDialog = false
                 }) {
                     Text(stringResource(R.string.preview_jump_confirm))
                 }
@@ -178,6 +260,20 @@ fun VerticalPageList(
     }
 }
 
+/** 缩放按钮的步进：保持锚点在页面中心，回 1x 时清平移。 */
+private fun zoomStep(
+    page: Int,
+    delta: Float,
+    scales: androidx.compose.runtime.snapshots.SnapshotStateMap<Int, Float>,
+    offsets: androidx.compose.runtime.snapshots.SnapshotStateMap<Int, Offset>,
+    maxZoom: Float
+) {
+    val current = scales[page] ?: 1f
+    val next = (current + delta).coerceIn(1f, maxZoom)
+    scales[page] = next
+    if (next <= 1f) offsets.remove(page) else offsets[page] = offsets[page] ?: Offset.Zero
+}
+
 @Composable
 private fun PageRow(
     pageIndex: Int,
@@ -186,7 +282,8 @@ private fun PageRow(
     cache: PageBitmapCache,
     renderPage: suspend (Int) -> Bitmap?,
     maxZoom: Float,
-    zoomResetToken: Int,
+    zoomScales: androidx.compose.runtime.snapshots.SnapshotStateMap<Int, Float>,
+    zoomOffsets: androidx.compose.runtime.snapshots.SnapshotStateMap<Int, Offset>,
     onPageIndicatorClick: () -> Unit
 ) {
     var bitmap by remember(pageIndex) { mutableStateOf<Bitmap?>(cache[pageIndex]) }
@@ -205,22 +302,15 @@ private fun PageRow(
         }
     }
     // 展示期间钉住该页，避免被 LRU 回收导致绘制到已回收位图
+    // pin/unpin 只在进入/离开组合时执行一次（DisposableEffect），不随重绘反复触发
     DisposableEffect(pageIndex) {
         cache.pin(pageIndex)
         onDispose { cache.unpin(pageIndex) }
     }
 
-    var scale by remember(pageIndex) { mutableStateOf(1f) }
-    var offset by remember(pageIndex) { mutableStateOf(Offset.Zero) }
+    val scale = zoomScales[pageIndex] ?: 1f
+    val offset = zoomOffsets[pageIndex] ?: Offset.Zero
     var boxSize by remember(pageIndex) { mutableStateOf(IntSize.Zero) }
-
-    // 「重置缩放」：由父组件递增 token 触发，恢复到 1x 并清除平移
-    LaunchedEffect(zoomResetToken) {
-        if (zoomResetToken > 0) {
-            scale = 1f
-            offset = Offset.Zero
-        }
-    }
 
     Column {
         Box(
@@ -232,13 +322,19 @@ private fun PageRow(
                     offsetProvider = { offset },
                     sizeProvider = { boxSize },
                     maxZoom = maxZoom,
-                    onScale = { scale = it },
-                    onOffset = { offset = it },
-                    onDoubleTap = {
+                    onScale = { zoomScales[pageIndex] = it },
+                    onOffset = { zoomOffsets[pageIndex] = it },
+                    onDoubleTap = { tap ->
+                        // 以点击点为锚点缩放：放大后手指下仍是原来的内容
+                        val center = boxSize.let { Offset(it.width / 2f, it.height / 2f) }
                         if (scale > 1f) {
-                            scale = 1f; offset = Offset.Zero
+                            zoomScales[pageIndex] = 1f
+                            zoomOffsets.remove(pageIndex)
                         } else {
-                            scale = 2f; offset = Offset.Zero
+                            zoomScales[pageIndex] = 2f
+                            // 推导：graphicsLayer(s, T) 把内容点 p 显示在 c + s(p-c) + T；
+                            // 要求点击点 t 处的内容仍在 t，得 T = (t - c)(1 - s)
+                            zoomOffsets[pageIndex] = (tap - center) * (1f - 2f)
                         }
                     }
                 ),
@@ -280,7 +376,7 @@ private fun PageRow(
  * - 两指：缩放并以双指中心为锚点平移；
  * - 单指且已缩放（>1x）：平移；
  * - 单指且未缩放：不消费事件，交给 LazyColumn 滚动。
- * 双击在 1x / 2x 间切换。
+ * 双击以**点击点**为锚点在 1x / 2x 间切换（[onDoubleTap] 收到的是组件内坐标）。
  */
 private fun Modifier.pinchZoom(
     scaleProvider: () -> Float,
@@ -289,10 +385,10 @@ private fun Modifier.pinchZoom(
     maxZoom: Float,
     onScale: (Float) -> Unit,
     onOffset: (Offset) -> Unit,
-    onDoubleTap: () -> Unit
+    onDoubleTap: (Offset) -> Unit
 ): Modifier = this
     .pointerInput(Unit) {
-        detectTapGestures(onDoubleTap = { onDoubleTap() })
+        detectTapGestures(onDoubleTap = { tap -> onDoubleTap(tap) })
     }
     .pointerInput(Unit) {
         awaitEachGesture {
@@ -320,7 +416,9 @@ private fun Modifier.pinchZoom(
                         } else {
                             // graphicsLayer 以组件中心为原点缩放；让手势开始时双指中心
                             // 对准的内容点始终落在当前双指中心，实现以手指为中心缩放。
-                            val center = sizeProvider().let { Offset(it.width / 2f, it.height / 2f) }
+                            val center = sizeProvider().let {
+                                Offset(it.width / 2f, it.height / 2f)
+                            }
                             val ratio = newScale / startScale
                             onOffset(centroid - center - (startCentroid - center - startOffset) * ratio)
                         }

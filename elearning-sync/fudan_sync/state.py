@@ -110,6 +110,16 @@ class StateStore:
                 filename TEXT DEFAULT '',
                 change TEXT DEFAULT '',        -- new | updated | removed
                 occurred_at TEXT DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS reading_progress (
+                file_id INTEGER PRIMARY KEY,
+                course_id INTEGER DEFAULT 0,
+                -- 页码（0 起）或媒体播放秒数，由 is_media 区分
+                position INTEGER DEFAULT 0,
+                total INTEGER DEFAULT 0,       -- 总页数或总秒数，用于算百分比
+                is_media INTEGER DEFAULT 0,
+                updated_at TEXT DEFAULT ''
             );            """)
         # 本地全文索引（v1.1.0 起）：CJK 预分词后的 FTS5 虚拟表。
         # 放在写事务之外单独建：失败时只把异常变成「索引不可用」的降级标记，
@@ -322,6 +332,54 @@ class StateStore:
             "SELECT * FROM files WHERE course_id=? ORDER BY folder_path, filename",
             (course_id,))
         return [dict(r) for r in cur.fetchall()]
+
+    def file_id_by_path(self, local_path: str) -> Optional[Dict[str, Any]]:
+        """按本地路径反查文件记录（预览入口只知道路径，翻页与进度需要 file_id）。"""
+        cur = self.conn.execute(
+            "SELECT * FROM files WHERE local_path=? LIMIT 1", (local_path,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    # ------------------------------------------------------------------
+    # 阅读进度（v1.1.2 起）：预览关闭/翻页时记录，下次打开时恢复
+    # ------------------------------------------------------------------
+    def get_reading_progress(self, file_id: int) -> Optional[Dict[str, Any]]:
+        cur = self.conn.execute(
+            "SELECT position, total, is_media, updated_at FROM reading_progress "
+            "WHERE file_id=?", (file_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def set_reading_progress(self, file_id: int, course_id: int, position: int,
+                             total: int, is_media: bool = False) -> None:
+        """记录阅读位置（页码或媒体秒）。重复调用为覆盖。"""
+        with self._write_lock_cursor() as cur:
+            cur.execute(
+                "INSERT INTO reading_progress (file_id, course_id, position, total,"
+                " is_media, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(file_id) DO UPDATE SET"
+                " course_id=excluded.course_id, position=excluded.position,"
+                " total=excluded.total, is_media=excluded.is_media,"
+                " updated_at=excluded.updated_at",
+                (file_id, course_id, int(position), int(total),
+                 1 if is_media else 0, now_utc()))
+
+    def progress_by_course(self, course_id: int) -> Dict[int, Dict[str, Any]]:
+        """整门课的阅读进度（供文件列表批量渲染进度列，避免逐行查询）。"""
+        cur = self.conn.execute(
+            "SELECT file_id, position, total, is_media, updated_at FROM reading_progress "
+            "WHERE course_id=?", (course_id,))
+        return {row["file_id"]: dict(row) for row in cur.fetchall()}
+
+    def clear_reading_progress(self, file_id: int) -> None:
+        with self._write_lock_cursor() as cur:
+            cur.execute("DELETE FROM reading_progress WHERE file_id=?", (file_id,))
+
+    def clear_course_reading_progress(self, course_id: int) -> None:
+        """课程文件被全部删除时清理对应进度（避免残留指向已删文件）。"""
+        with self._write_lock_cursor() as cur:
+            cur.execute("DELETE FROM reading_progress WHERE course_id=?",
+                        (course_id,))
 
     # ------------------------------------------------------------------
     # 本地全文索引（v1.1.0 起；文件内容搜索见 search_index.py）

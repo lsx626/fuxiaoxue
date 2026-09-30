@@ -122,4 +122,36 @@ object FileUtils {
         if (mb < 1024) return "%.1f MB".format(mb)
         return "%.2f GB".format(mb / 1024.0)
     }
+
+    /** 格式化下载速率（同步状态卡用）。不足 1 B/s 时显示 「—」 避免抖动。 */
+    fun formatRate(bytesPerSecond: Double): String {
+        if (bytesPerSecond < 1.0) return "—"
+        if (bytesPerSecond < 1024) return "${bytesPerSecond.toInt()} B/s"
+        val kb = bytesPerSecond / 1024.0
+        if (kb < 1024) return "%.1f KB/s".format(kb)
+        val mb = kb / 1024.0
+        return "%.1f MB/s".format(mb)
+    }
+
+    /** 格式化已用时长（同步状态卡用）。 */
+    fun formatElapsed(seconds: Long): String {
+        if (seconds < 60) return "${seconds} 秒"
+        return "${seconds / 60} 分 ${seconds % 60} 秒"
+    }
+
+    /** 从 Canvas 课程名中剥离内嵌的选课代码（如「数据处理与数据库 DATA130012.01」
+     * 或「DATA130012.01 数据处理与数据库」），纯展示用，不改数据库。
+     * 注意：括号本身可能是名字的一部分（如「普通化学A（上）」），只有**包着代码**
+     * 的括号才整对删掉，不能把所有括号都替换成空格。 */
+    fun cleanCourseName(raw: String): String {
+        if (raw.isEmpty()) return raw
+        // 复旦选课代码形如 DATA130012.01 / CHEM10003.03（主编号 5~6 位）
+        val code = "[A-Z]{2,6}\\d{5,6}(?:\\.\\d{1,2})?"
+        // 1)「（CODE）」式：整对括号一起去
+        var name = Regex("[（(]\\s*$code\\s*[）)]").replace(raw, " ")
+        // 2) 裸代码：连同两侧空白一起吞掉
+        name = Regex("\\s*$code\\s*").replace(name, " ")
+        name = Regex("\\s+").replace(name, " ").trim()
+        return name.ifEmpty { raw.trim() }
+    }
 }

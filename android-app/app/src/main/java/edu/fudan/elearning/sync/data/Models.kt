@@ -67,7 +67,9 @@ data class Assignment(
     val name: String,
     /** Canvas `due_at`（ISO8601 或空字符串）。 */
     val dueAt: String = "",
-    val htmlUrl: String = ""
+    val htmlUrl: String = "",
+    /** 课程名（LEFT JOIN courses；课程记录缺失时显示兜底文案）。 */
+    val courseName: String = ""
 )
 
 /** 文件级变更摘要（sync_changes 表的一行） */

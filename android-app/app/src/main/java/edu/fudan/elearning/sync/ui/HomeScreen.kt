@@ -34,6 +34,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
@@ -54,6 +55,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -87,6 +89,7 @@ import edu.fudan.elearning.sync.BuildConfig
 import edu.fudan.elearning.sync.R
 import edu.fudan.elearning.sync.data.CourseStats
 import edu.fudan.elearning.sync.data.FileItem
+import edu.fudan.elearning.sync.data.Repo
 import edu.fudan.elearning.sync.util.FileUtils
 
 private enum class Tab { COURSES, STORAGE, SETTINGS }
@@ -117,7 +120,8 @@ fun HomeScreen(viewModel: AppViewModel) {
                 title = {
                     Column {
                         Text(
-                            selectedCourse?.course?.name ?: "复小学",
+                            selectedCourse?.course?.name?.let { FileUtils.cleanCourseName(it) }
+                                ?: "复小学",
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             fontWeight = FontWeight.SemiBold
@@ -216,17 +220,33 @@ fun HomeScreen(viewModel: AppViewModel) {
             ).padding(padding)
         ) {
             AnimatedVisibility(visible = syncing, enter = fadeIn(), exit = fadeOut()) {
-                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)) {
-                    LinearProgressIndicator(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp))
+                SyncStatusCard(viewModel)
+            }
+            // 同步完成后的结果条（4 秒自动消失；失败走错色横幅，不在这里重复）
+            val doneProgress by viewModel.syncProgress.collectAsState()
+            AnimatedVisibility(
+                visible = !syncing && doneProgress.phase == "done" && doneProgress.message.isNotEmpty(),
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                LaunchedEffect(doneProgress.message) {
+                    kotlinx.coroutines.delay(4000)
+                    viewModel.markSyncDoneSeen()
+                }
+                Card(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
                     )
+                ) {
                     Text(
-                        syncProgress,
+                        doneProgress.message,
+                        Modifier.fillMaxWidth().padding(12.dp),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 4.dp)
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -247,12 +267,28 @@ fun HomeScreen(viewModel: AppViewModel) {
 
 /**
  * 最近截止的作业（v3 起）：同步时从 Canvas assignments 采集 `due_at`。
- * 没有截止时间时不占位；有截至作业时按时间升序展示最多 3 项。
+ * 同时展示「已截止」（红色，最近 3 项）与「未截止」（最多 5 项），
+ * 每项标注课程名；没有截止作业时不占位。
  */
 @Composable
 private fun UpcomingDeadlines(viewModel: AppViewModel) {
     val upcoming by viewModel.upcoming.collectAsState()
     if (upcoming.isEmpty()) {
+        Text(
+            stringResource(R.string.upcoming_deadlines_empty),
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        return
+    }
+    // 按当前时间分区：列表本身按 due_at 升序，取过头即可
+    val nowMs = remember { java.time.OffsetDateTime.now().toInstant().toEpochMilli() }
+    val overdue = remember(upcoming) {
+        upcoming.filter { parseDueMs(it.dueAt) < nowMs }.takeLast(3).reversed()
+    }
+    val pending = remember(upcoming) { upcoming.filter { parseDueMs(it.dueAt) >= nowMs }.take(5) }
+    if (overdue.isEmpty() && pending.isEmpty()) {
         Text(
             stringResource(R.string.upcoming_deadlines_empty),
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
@@ -275,16 +311,52 @@ private fun UpcomingDeadlines(viewModel: AppViewModel) {
                 fontWeight = FontWeight.SemiBold
             )
             Spacer(Modifier.size(6.dp))
-            upcoming.take(3).forEach { assignment ->
-                Text(
-                    "【${formatDueAt(assignment.dueAt)}】${assignment.name}",
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(vertical = 2.dp)
+            overdue.forEach { assignment ->
+                DeadlineRow(
+                    stamp = formatDueAt(assignment.dueAt),
+                    name = assignment.name,
+                    course = assignment.courseName,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            pending.forEach { assignment ->
+                DeadlineRow(
+                    stamp = formatDueAt(assignment.dueAt),
+                    name = assignment.name,
+                    course = assignment.courseName,
+                    color = MaterialTheme.colorScheme.primary
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun DeadlineRow(stamp: String, name: String, course: String, color: Color) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "【$stamp】",
+            style = MaterialTheme.typography.bodySmall,
+            color = color,
+            fontWeight = FontWeight.Medium
+        )
+        Text(
+            name,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            " · ${FileUtils.cleanCourseName(course.ifEmpty { "未知课程" })}",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -296,6 +368,14 @@ private fun formatDueAt(dueAt: String): String {
         val local = parsed.atZoneSameInstant(java.time.ZoneId.systemDefault())
         local.format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"))
     }.getOrElse { dueAt.take(16) }
+}
+
+/** due_at 转毫秒时间戳（用于与当前时间比较，区分已截止 / 未截止）。 */
+private fun parseDueMs(dueAt: String): Long {
+    if (dueAt.isEmpty()) return Long.MAX_VALUE
+    return runCatching {
+        java.time.OffsetDateTime.parse(dueAt).toInstant().toEpochMilli()
+    }.getOrElse { Long.MAX_VALUE }
 }
 
 /** 顶栏溢出菜单：全量同步等次要但常用的操作。 */
@@ -365,6 +445,116 @@ private fun SyncErrorBanner(viewModel: AppViewModel) {
         }
     }
 }
+
+/**
+ * 同步状态卡：不只是「同步中」三个字，而是同时展示进度、内容与速度。
+ *
+ * - 课程阶段：「课程 2/7 · 机器学习导论」+ 确定性进度条；
+ * - 下载阶段：当前文件名 +「3/12 个文件」+ 实时速率「1.8 MB/s · 42 秒」；
+ * - 索引回填阶段：说明 + 不定进度条。
+ */
+@Composable
+private fun SyncStatusCard(viewModel: AppViewModel) {
+    val progress by viewModel.syncProgress.collectAsState()
+    // 500ms 心跳：让速度/已用时间持续刷新，而不是只在有新事件时才动
+    var nowTick by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(500)
+            nowTick = System.currentTimeMillis()
+        }
+    }
+    Card(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer
+        )
+    ) {
+        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+            // 第一行：阶段标题（课程 x/N）与课程名
+            val title = when (progress.phase) {
+                "start", "courses" -> progress.message.ifEmpty { "正在同步…" }
+                "course" -> if (progress.courseTotal > 0)
+                    "正在同步 · 课程 ${progress.courseDone}/${progress.courseTotal}"
+                else "正在同步课程…"
+                "file" -> if (progress.filesTotal > 0)
+                    "正在下载 · ${progress.courseName.ifEmpty { "课程" }}"
+                else "正在下载…"
+                "index" -> "正在建立内容索引…"
+                "done" -> progress.message
+                else -> progress.message
+            }
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (progress.phase == "course" && progress.courseName.isNotEmpty()) {
+                Text(
+                    FileUtils.cleanCourseName(progress.courseName),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+            // 第二行：下载内容（当前文件名 + 计数）
+            if (progress.phase == "file") {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    // 「下载：lec5.pdf」消息里已带文件名；总数另有计数行
+                    progress.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (progress.filesTotal > 0) {
+                    Text(
+                        "文件 ${progress.filesDone}/${progress.filesTotal}" +
+                            " · ${FileUtils.formatBytes(progress.bytes)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+            }
+            // 第三行：速度与已用时间（只在已经有字节进账时显示，避免「0 B/s」抖动）
+            val elapsedSec = if (progress.startedAt > 0)
+                ((nowTick - progress.startedAt) / 1000).coerceAtLeast(0) else 0
+            if ((progress.phase == "file" || progress.phase == "done") && progress.bytes > 0) {
+                val rate = if (elapsedSec > 0)
+                    progress.bytes.toDouble() / elapsedSec else 0.0
+                Text(
+                    "${FileUtils.formatRate(rate)} · 已用 ${FileUtils.formatElapsed(elapsedSec)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            // 进度条：课程阶段是确定性的；抓课程列表/建索引是不定的
+            val courseRatio = if (progress.phase == "course" && progress.courseTotal > 0)
+                (progress.courseDone.toFloat() / progress.courseTotal).coerceIn(0f, 1f) else null
+            if (courseRatio != null) {
+                LinearProgressIndicator(
+                    progress = { courseRatio },
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp))
+                )
+            } else {
+                LinearProgressIndicator(
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp))
+                )
+            }
+        }
+    }
+}
+
 /** 顶栏同步按钮：同步中显示脉冲圆点动画。 */
 @Composable
 private fun SyncButton(syncing: Boolean, onClick: () -> Unit) {
@@ -535,7 +725,7 @@ private fun CourseCard(stats: CourseStats, onOpen: () -> Unit) {
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    stats.course.name,
+                    FileUtils.cleanCourseName(stats.course.name),
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
@@ -584,10 +774,16 @@ private fun FileListView(viewModel: AppViewModel, stats: CourseStats) {
     // 数据版本号作为 key：删除/同步后必须立刻反映数据库变化，
     // 不能只按课程 id 缓存（历史缺陷：删完文件界面还在显示旧列表）。
     val dataVersion by viewModel.dataVersion.collectAsState()
-    // filesOf 是挂起函数（查询在 IO 线程）：用 produceState 异步加载，
-    // 不在组合期阻塞主线程
-    val files by produceState(emptyList<FileItem>(), stats.course.id, dataVersion) {
-        value = viewModel.filesOf(stats.course.id)
+    // v1.1.2：带阅读进度的文件列表（未读优先排序 + 进度文案）
+    val files by produceState(
+        emptyList<Pair<FileItem, Repo.ReadingProgress?>>(),
+        stats.course.id, dataVersion
+    ) {
+        value = sortFilesUnreadFirst(viewModel.filesWithProgress(stats.course.id))
+    }
+    // v1.1.2：顶部「继续阅读」条（有进度记录时才出现）
+    val latest by produceState<FileItem?>(null, stats.course.id, dataVersion) {
+        value = viewModel.latestReadFile(stats.course.id)
     }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -613,15 +809,77 @@ private fun FileListView(viewModel: AppViewModel, stats: CourseStats) {
                     )
                 }
             }
+        } else if (latest != null) {
+            item {
+                val item = latest!!
+                Surface(
+                    Modifier.fillMaxWidth().clickable { viewModel.openPreview(item) },
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Filled.PlayArrow,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSecondaryContainer
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            "继续阅读：${item.name}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
         }
-        items(files, key = { it.fileId }) { file ->
-            FileRow(file, viewModel)
+        items(files, key = { it.first.fileId }) { (file, progress) ->
+            FileRow(file, progress, viewModel)
         }
     }
 }
 
+/** 未读优先排序：无进度记录（或 position=0）的排前，已读按最近阅读时间降序。 */
+private fun sortFilesUnreadFirst(
+    files: List<Pair<FileItem, Repo.ReadingProgress?>>
+): List<Pair<FileItem, Repo.ReadingProgress?>> {
+    val read = mutableListOf<Pair<FileItem, Repo.ReadingProgress?>>()
+    val unread = mutableListOf<Pair<FileItem, Repo.ReadingProgress?>>()
+    for (pair in files) {
+        val prog = pair.second
+        if (prog != null && prog.position > 0) read += pair else unread += pair
+    }
+    read.sortByDescending { it.second?.updatedAt ?: "" }
+    return unread + read
+}
+
+/** v1.1.2：进度文案。null 或未开始 → 「未读」（强调色），媒体显示时间。 */
+private fun progressText(progress: Repo.ReadingProgress?): String {
+    if (progress == null || progress.position <= 0) return "未读"
+    if (progress.isMedia) {
+        fun fmt(sec: Int) = "%d:%02d".format(sec / 60, sec % 60)
+        return if (progress.total > 0) "${fmt(progress.position)} / ${fmt(progress.total)}"
+        else fmt(progress.position)
+    }
+    return if (progress.total > 0) {
+        val percent = kotlin.math.min(100, progress.position * 100 / progress.total)
+        "第 ${progress.position + 1} / ${progress.total} 页 · $percent%"
+    } else "第 ${progress.position + 1} 页"
+}
+
 @Composable
-private fun FileRow(file: FileItem, viewModel: AppViewModel) {
+private fun FileRow(
+    file: FileItem,
+    progress: Repo.ReadingProgress?,
+    viewModel: AppViewModel
+) {
     Card(
         Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
@@ -657,6 +915,7 @@ private fun FileRow(file: FileItem, viewModel: AppViewModel) {
                 )
                 Spacer(Modifier.height(2.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    val progressText = progressText(progress)
                     Text(
                         FileUtils.formatBytes(file.size),
                         style = MaterialTheme.typography.bodySmall,
@@ -671,6 +930,15 @@ private fun FileRow(file: FileItem, viewModel: AppViewModel) {
                             else -> MaterialTheme.colorScheme.onSurfaceVariant
                         }
                     )
+                    if (progressText.isNotEmpty()) {
+                        Text(
+                            " · $progressText",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (progress == null || progress.position <= 0)
+                                MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 if (file.status == "failed") {
                     Spacer(Modifier.height(2.dp))
@@ -689,14 +957,7 @@ private fun FileRow(file: FileItem, viewModel: AppViewModel) {
                     TextButton(onClick = { viewModel.retryFile(file) }) {
                         Text("重试")
                     }
-                // 远端已删除：重试只会 404，还会把准确的 remote_missing 状态改写成
-                // failed；这里显示不可操作的状态说明
-                file.status == "remote_missing" -> Text(
-                    "远端已删除",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 8.dp)
-                )
+                // remote_missing 的文件已在查询层隐藏，不会走到这里
                 else -> Text(
                     stringResource(R.string.file_pending),
                     style = MaterialTheme.typography.labelSmall,
@@ -823,7 +1084,7 @@ private fun StorageCourseCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        stats.course.name,
+                        FileUtils.cleanCourseName(stats.course.name),
                         style = MaterialTheme.typography.titleSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis

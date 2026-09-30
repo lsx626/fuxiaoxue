@@ -57,7 +57,8 @@ class Repo(context: Context) {
                       COUNT(f.file_id) AS total,
                       SUM(CASE WHEN f.status='downloaded' THEN 1 ELSE 0 END) AS done,
                       SUM(CASE WHEN f.status='downloaded' THEN COALESCE(f.size,0) ELSE 0 END) AS bytes
-               FROM courses c LEFT JOIN files f ON f.course_id = c.id
+               FROM courses c LEFT JOIN files f
+                    ON f.course_id = c.id AND f.status != 'remote_missing'
                GROUP BY c.id, c.name, c.code, c.term, c.last_synced_at
                ORDER BY c.name""", null
         ).use { c ->
@@ -126,6 +127,22 @@ class Repo(context: Context) {
         return list
     }
 
+    /**
+     * 课程文件列表（界面展示用）：远端已删除的行不返回——它们对用户没有阅读价值，
+     * 留在库里只是为了让增量逻辑与下次同步的判定有历史依据。
+     *
+     * 引擎仍用 [getFilesByCourse]（需要 remote_missing 行）。
+     */
+    fun getVisibleFilesByCourse(courseId: Long): List<FileItem> {
+        val list = mutableListOf<FileItem>()
+        db.readableDatabase.rawQuery(
+            "SELECT * FROM files WHERE course_id=? AND status!='remote_missing' " +
+                "ORDER BY folder_path, filename",
+            arrayOf(courseId.toString())
+        ).use { c -> while (c.moveToNext()) list.add(c.toFile()) }
+        return list
+    }
+
     fun getAllDownloadedFiles(): List<FileItem> {
         val list = mutableListOf<FileItem>()
         db.readableDatabase.rawQuery(
@@ -141,6 +158,8 @@ class Repo(context: Context) {
             dbw.delete("files", "file_id=?", arrayOf(fileId.toString()))
             // 同步清掉搜索索引，避免搜到已经不存在的文件
             dbw.delete("files_fts", "file_id=?", arrayOf(fileId.toString()))
+            // v1.1.2：阅读进度同步清理，避免残留指向已删文件
+            dbw.delete("reading_progress", "file_id=?", arrayOf(fileId.toString()))
             dbw.setTransactionSuccessful()
         } finally {
             dbw.endTransaction()
@@ -159,6 +178,7 @@ class Repo(context: Context) {
                 arrayOf(courseId)
             )
             dbw.delete("files", "course_id=?", arrayOf(courseId.toString()))
+            dbw.delete("reading_progress", "course_id=?", arrayOf(courseId.toString()))
             dbw.setTransactionSuccessful()
         } finally {
             dbw.endTransaction()
@@ -350,8 +370,8 @@ class Repo(context: Context) {
     fun assignments(limit: Int = 100): List<Assignment> {
         val list = mutableListOf<Assignment>()
         db.readableDatabase.rawQuery(
-            """SELECT a.id, a.course_id, a.name, a.due_at, a.html_url
-               FROM assignments a
+            """SELECT a.id, a.course_id, a.name, a.due_at, a.html_url, c.name
+               FROM assignments a LEFT JOIN courses c ON c.id = a.course_id
                WHERE a.due_at != ''
                ORDER BY a.due_at ASC LIMIT ?""",
             arrayOf(limit.toString())
@@ -361,12 +381,97 @@ class Repo(context: Context) {
                     Assignment(
                         id = c.getLong(0), courseId = c.getLong(1),
                         name = c.getString(2) ?: "", dueAt = c.getString(3) ?: "",
-                        htmlUrl = c.getString(4) ?: ""
+                        htmlUrl = c.getString(4) ?: "",
+                        courseName = c.getString(5) ?: ""
                     )
                 )
             }
         }
         return list
+    }
+
+    // ---------- 阅读进度（v4 起；v1.1.2 新增） ----------
+
+    /** 阅读位置：页码或媒体秒。 */
+    data class ReadingProgress(
+        val fileId: Long, val position: Int, val total: Int,
+        val isMedia: Boolean, val updatedAt: String
+    )
+
+    fun getReadingProgress(fileId: Long): ReadingProgress? {
+        db.readableDatabase.rawQuery(
+            "SELECT file_id, position, total, is_media, updated_at FROM reading_progress " +
+                "WHERE file_id=?",
+            arrayOf(fileId.toString())
+        ).use { c ->
+            if (!c.moveToFirst()) return null
+            return ReadingProgress(
+                fileId = c.getLong(0),
+                position = c.getInt(1),
+                total = c.getInt(2),
+                isMedia = c.getInt(3) == 1,
+                updatedAt = c.getString(4) ?: ""
+            )
+        }
+    }
+
+    /** 记录/覆盖阅读位置。position<=0 视为未读（与排序口径一致）。 */
+    fun setReadingProgress(fileId: Long, courseId: Long, position: Int, total: Int,
+                           isMedia: Boolean) {
+        val values = ContentValues().apply {
+            put("file_id", fileId)
+            put("course_id", courseId)
+            put("position", position)
+            put("total", total)
+            put("is_media", if (isMedia) 1 else 0)
+            put("updated_at", System.currentTimeMillis().toString())
+        }
+        db.writableDatabase.insertWithOnConflict(
+            "reading_progress", null, values,
+            android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE
+        )
+    }
+
+    fun clearReadingProgress(fileId: Long) {
+        db.writableDatabase.delete(
+            "reading_progress", "file_id=?", arrayOf(fileId.toString())
+        )
+    }
+
+    /** 整门课的进度（文件列表批量渲染 + 未读优先排序，避免逐行查询）。 */
+    fun progressByCourse(courseId: Long): Map<Long, ReadingProgress> {
+        val map = mutableMapOf<Long, ReadingProgress>()
+        db.readableDatabase.rawQuery(
+            "SELECT file_id, position, total, is_media, updated_at FROM reading_progress " +
+                "WHERE course_id=?",
+            arrayOf(courseId.toString())
+        ).use { c ->
+            while (c.moveToNext()) {
+                val fid = c.getLong(0)
+                map[fid] = ReadingProgress(
+                    fileId = fid,
+                    position = c.getInt(1),
+                    total = c.getInt(2),
+                    isMedia = c.getInt(3) == 1,
+                    updatedAt = c.getString(4) ?: ""
+                )
+            }
+        }
+        return map
+    }
+
+    /** 最近阅读的课程内文件路径（供「继续阅读」入口）。 */
+    fun latestReadFileOfCourse(courseId: Long): FileItem? {
+        db.readableDatabase.rawQuery(
+            "SELECT f.* FROM reading_progress p JOIN files f ON f.file_id = p.file_id " +
+                "WHERE p.course_id=? AND p.position > 0 " +
+                "ORDER BY p.updated_at DESC LIMIT 1",
+            arrayOf(courseId.toString())
+        ).use { c ->
+            if (!c.moveToFirst()) return null
+            // 列名与 files 全列查询一致，直接复用 toFile()
+            return c.toFile()
+        }
     }
 
     // ---------- 变更摘要（v3 起） ----------

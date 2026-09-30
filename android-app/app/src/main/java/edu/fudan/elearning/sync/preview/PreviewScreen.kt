@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -26,6 +28,9 @@ import java.io.File
 /** 走富文本渲染的 HTML 扩展名（与桌面端 previewer 的 HTML 集合一致）。 */
 private val HTML_EXTENSIONS = setOf("html", "htm", "xhtml")
 
+/** ODF 三格式：结构化文档视图（v1.1.2）。 */
+private val ODF_EXTS = setOf("odt", "ods", "odp")
+
 /**
  * 统一预览路由：文件存在性/权限检查 -> [FileTypes] 类型识别 -> 分发到具体预览。
  *
@@ -41,7 +46,14 @@ fun PreviewScreen(
     file: File,
     displayName: String = file.name,
     onBack: () -> Unit,
-    onShare: (File) -> Unit
+    onShare: (File) -> Unit,
+    // v1.1.2：预览内翻文件与阅读进度（无上下文时传默认值，预览照常工作）
+    siblingCount: Int = 0,
+    onNavigateSibling: (Int) -> Unit = {},
+    initialPage: Int = -1,
+    onPageChanged: (page: Int, total: Int) -> Unit = { _, _ -> },
+    initialMediaSec: Int = -1,
+    onMediaPositionChanged: (sec: Int, totalSec: Int) -> Unit = { _, _ -> }
 ) {
     val title = remember(displayName, file.name) {
         displayName.ifBlank { file.name }
@@ -67,6 +79,21 @@ fun PreviewScreen(
                     }
                 },
                 actions = {
+                    // 同课程的上/下一个文件（无上下文时隐藏）
+                    if (siblingCount > 1) {
+                        IconButton(onClick = { onNavigateSibling(-1) }) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                                contentDescription = "上一个文件"
+                            )
+                        }
+                        IconButton(onClick = { onNavigateSibling(1) }) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                contentDescription = "下一个文件"
+                            )
+                        }
+                    }
                     if (file.exists()) {
                         IconButton(onClick = { onShare(file) }) {
                             Icon(Icons.Filled.Share, contentDescription = "分享文件")
@@ -91,15 +118,25 @@ fun PreviewScreen(
                     onAction = { onShare(file) }
                 )
                 else -> when (kind) {
-                    PreviewKind.PDF -> PdfPreviewScreen(file)
+                    PreviewKind.PDF -> PdfPreviewScreen(
+                        file, initialPage = initialPage, onPageChanged = onPageChanged
+                    )
                     PreviewKind.IMAGE -> ImagePreviewScreen(file)
                     // html/htm 走富文本渲染（不再显示源文本），其余文本/代码走源码视图
                     PreviewKind.TEXT ->
                         if (FileTypes.extOf(file.name) in HTML_EXTENSIONS) HtmlPreviewScreen(file)
                         else TextPreviewScreen(file)
-                    PreviewKind.MEDIA -> MediaPreviewScreen(file)
+                    PreviewKind.MEDIA -> MediaPreviewScreen(
+                        file,
+                        initialPositionSec = initialMediaSec,
+                        onPositionChanged = onMediaPositionChanged
+                    )
                     PreviewKind.OFFICE -> OfficePreviewScreen(file, title)
-                    PreviewKind.STRUCTURED -> OfficeFallbackScreen(file, title)
+                    PreviewKind.STRUCTURED ->
+                        // v1.1.2：ODF 三格式走结构化文档视图（标题/列表/表格/图片），
+                        // 其余（zip/rtf 等）仍是文本降级
+                        if (FileTypes.extOf(file.name) in ODF_EXTS) OdfDocumentScreen(file)
+                        else OfficeFallbackScreen(file, title)
                     PreviewKind.UNSUPPORTED -> PreviewError(
                         message = "暂不支持在应用内预览此格式。",
                         actionLabel = stringResource(R.string.preview_open_other),

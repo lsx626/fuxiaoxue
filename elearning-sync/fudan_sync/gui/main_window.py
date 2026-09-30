@@ -23,7 +23,7 @@ from ..auth import AuthError
 from ..config import load_config
 from ..search_index import filter_file_records
 from ..state import StateStore
-from ..utils import format_size, sanitize_path_component
+from ..utils import clean_course_name, format_size, sanitize_path_component
 from .config_io import load_gui_state, save_gui_state
 from .icon import app_icon
 from .login_window import LoginWindow
@@ -132,6 +132,8 @@ class MainWindow(QMainWindow):
         self._quit_pending = False
         self._current_file_course_id: Optional[int] = None  # 当前展开文件列表的课程 ID
         self._current_course_files: list = []  # 当前课程的全量文件记录（过滤前）
+        self._current_course_id: Optional[int] = None  # v1.1.2：预览上下文（当前课程）
+        self._course_reading_progress: dict = {}  # v1.1.2：当前课程的阅读进度批量缓存
         self.search_dialog: Optional[SearchDialog] = None
 
         self.setObjectName("root")
@@ -414,8 +416,9 @@ class MainWindow(QMainWindow):
         file_header_row.addWidget(self.file_count_label)
         file_layout.addLayout(file_header_row)
 
-        self.file_table = QTableWidget(0, 4)
-        self.file_table.setHorizontalHeaderLabels(["文件名", "大小", "状态", "下载时间"])
+        self.file_table = QTableWidget(0, 5)
+        self.file_table.setHorizontalHeaderLabels(
+            ["文件名", "大小", "状态", "阅读进度", "下载时间"])
         self.file_table.verticalHeader().setVisible(False)
         self.file_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.file_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -760,7 +763,9 @@ class MainWindow(QMainWindow):
 
         self.course_table.setRowCount(len(courses))
         for row, course in enumerate(courses):
-            self._set_table_item(row, 0, course.get("name") or f"课程 {course.get('id')}", bold=True)
+            self._set_table_item(
+                row, 0, clean_course_name(course.get("name") or f"课程 {course.get('id')}"),
+                bold=True)
             self._set_table_item(row, 1, course.get("term") or "")
             files_total = course.get("files_total") or 0
             files_done = course.get("files_done") or 0
@@ -831,16 +836,25 @@ class MainWindow(QMainWindow):
         except Exception:  # pylint: disable=broad-except
             return
         try:
-            files = state.list_files_by_course(course_id)
+            # 远端已删除的文件不在课程文件列表中展示（对用户没有阅读价值）；
+            # 行仍保留在库里供增量逻辑与存储管理使用。
+            files = [
+                f for f in state.list_files_by_course(course_id)
+                if f.get("status") != "remote_missing"
+            ]
+            # v1.1.2：批量取阅读进度（进度列 + 未读优先排序）
+            self._course_reading_progress = state.progress_by_course(course_id)
             # 获取课程名用于标题
             course_name = ""
             for course in state.list_courses():
                 if course.get("id") == course_id:
-                    course_name = course.get("name") or f"课程 {course_id}"
+                    course_name = clean_course_name(
+                        course.get("name") or f"课程 {course_id}")
                     break
         finally:
             state.close()
 
+        self._current_course_id = course_id
         self.file_panel_title.setText(f"{course_name} · 文件列表")
         self._current_course_files = files
         self._apply_file_filter(self.file_filter_edit.text())
@@ -849,6 +863,10 @@ class MainWindow(QMainWindow):
         """按关键字过滤当前课程文件列表（纯函数过滤，不改底层数据）。"""
         files = getattr(self, "_current_course_files", []) or []
         filtered = filter_file_records(files, query or "")
+        # v1.1.2：未读优先排序——没读过的排前面，读过的按最近阅读时间降序。
+        # 用户的学习节奏是「把没读的读完」，而不是按目录字母序。
+        progress = getattr(self, "_course_reading_progress", {}) or {}
+        filtered = self._sort_files_unread_first(filtered, progress)
         self._render_file_rows(filtered)
         total = len(files)
         shown = len(filtered)
@@ -892,11 +910,54 @@ class MainWindow(QMainWindow):
             status_item.setForeground(QColor(status_color))
             self.file_table.setItem(row, 2, status_item)
 
+            # 阅读进度
+            progress_text, progress_color = self._reading_progress_text(file_info)
+            progress_item = QTableWidgetItem(progress_text)
+            progress_item.setTextAlignment(Qt.AlignCenter)
+            progress_item.setForeground(QColor(progress_color))
+            self.file_table.setItem(row, 3, progress_item)
+
             # 下载时间
             time_text = _relative_time(downloaded_at) if downloaded_at else "—"
             time_item = QTableWidgetItem(time_text)
             time_item.setTextAlignment(Qt.AlignCenter)
-            self.file_table.setItem(row, 3, time_item)
+            self.file_table.setItem(row, 4, time_item)
+
+    def _reading_progress_text(self, file_info: dict) -> tuple:
+        """v1.1.2：进度列文案。无记录返回「未读」（强调色），媒体显示时间。"""
+        progress = (getattr(self, "_course_reading_progress", {}) or {}).get(
+            file_info.get("file_id"))
+        if not progress:
+            return ("未读", ACCENT)
+        position = int(progress.get("position") or 0)
+        total = int(progress.get("total") or 0)
+        if progress.get("is_media"):
+            def fmt(seconds: int) -> str:
+                return f"{seconds // 60}:{seconds % 60:02d}"
+            return (f"{fmt(position)} / {fmt(total)}", TEXT_SECONDARY)
+        if not position:
+            return ("未读", ACCENT)
+        if total:
+            percent = min(100, int(position * 100 / max(total, 1)))
+            return (f"第 {position + 1} / {total} 页 · {percent}%", SUCCESS)
+        return (f"第 {position + 1} 页", SUCCESS)
+
+    @staticmethod
+    def _sort_files_unread_first(files: list, progress: dict) -> list:
+        """未读文件（无进度）排在已读之前；已读按最近阅读时间降序。
+
+        排序是稳定的（Python 的 sort）：同组之内保持原来的目录/文件名顺序。
+        """
+        read, unread = [], []
+        for record in files:
+            prog = progress.get(record.get("file_id"))
+            if prog and int(prog.get("position") or 0):
+                read.append(record)
+            else:
+                unread.append(record)
+        read.sort(key=lambda r: str(progress[r.get("file_id")].get("updated_at") or ""),
+                  reverse=True)
+        return unread + read
 
     @staticmethod
     def _format_file_status(status: str) -> tuple:
@@ -927,13 +988,21 @@ class MainWindow(QMainWindow):
             return
         self._open_preview_for_path(file_path)
 
-    def _open_preview_for_path(self, file_path: str) -> None:
-        """打开预览对话框（文件列表与搜索结果共用入口）。"""
+    def _open_preview_for_path(self, file_path: str,
+                               course_id: Optional[int] = None) -> None:
+        """打开预览对话框（文件列表与搜索结果共用入口）。
+
+        v1.1.2：带上课程上下文与库路径，预览内即可翻文件、记录阅读进度。
+        """
         if not file_path or not os.path.exists(file_path):
             return
         if self.preview_dialog is not None and self.preview_dialog.isVisible():
             self.preview_dialog.close()
-        dialog = DocumentPreviewDialog(file_path, parent=self)
+        if course_id is None:
+            course_id = getattr(self, "_current_course_id", None)
+        dialog = DocumentPreviewDialog(
+            file_path, parent=self, course_id=course_id,
+            state_db=self.cfg.state_db)
         dialog_ref = ref(dialog)
         dialog.finished.connect(
             lambda _result, preview_ref=dialog_ref: self._release_preview_dialog(
@@ -1030,7 +1099,8 @@ class MainWindow(QMainWindow):
             return f"新增 {downloaded} 个文件，共 {format_size(total_bytes)}"
         grouped = {}
         for item in changes:
-            course = item.get("course_name") or f"课程 {item.get('course_id')}"
+            course = clean_course_name(
+                item.get("course_name") or f"课程 {item.get('course_id')}")
             grouped.setdefault(course, []).append(item.get("filename") or "未知文件")
         lines = []
         for course, names in list(grouped.items())[:3]:
@@ -1161,16 +1231,55 @@ class MainWindow(QMainWindow):
             return
         from PySide6.QtWidgets import QMenu
         menu = QMenu(self)
+        resume_action = menu.addAction("继续阅读（最近阅读的文件）")
+        menu.addSeparator()
         open_action = menu.addAction("打开课程目录")
         sync_action = menu.addAction("仅同步此课程")
         portal_action = menu.addAction("在浏览器中打开课程")
         action = menu.exec(self.course_table.viewport().mapToGlobal(position))
-        if action == open_action:
+        if action == resume_action:
+            self._resume_reading(course_id)
+        elif action == open_action:
             self._open_course_dir(course_id)
         elif action == sync_action:
             self._start_sync(full=False, course_ids=[course_id])
         elif action == portal_action:
             webbrowser.open(f"{self.cfg.base_url}/courses/{course_id}")
+
+    def _resume_reading(self, course_id: Optional[int] = None) -> None:
+        """v1.1.2：直接打开该课程最近阅读的文件（没有记录则提示）。"""
+        course_id = course_id if course_id is not None else self._selected_course_id()
+        if course_id is None:
+            return
+        try:
+            state = StateStore(self.cfg.state_db)
+        except Exception:  # pylint: disable=broad-except
+            return
+        try:
+            progress = state.progress_by_course(course_id)
+            # 按 updated_at 降序找第一个仍有本地文件的记录
+            ordered = sorted(
+                progress.items(),
+                key=lambda kv: str(kv[1].get("updated_at") or ""),
+                reverse=True)
+            best_path = None
+            for file_id, prog in ordered:
+                if not int(prog.get("position") or 0):
+                    continue
+                row = state.get_file(file_id)
+                if row and row.get("status") == "downloaded" and row.get("local_path") \
+                        and os.path.exists(row["local_path"]):
+                    best_path = row["local_path"]
+                    break
+        except Exception:  # pylint: disable=broad-except
+            best_path = None
+        finally:
+            state.close()
+        if best_path:
+            self._open_preview_for_path(best_path, course_id=course_id)
+        else:
+            QMessageBox.information(
+                self, "继续阅读", "该课程还没有阅读记录，双击课程打开文件列表后开始阅读。")
 
     def _open_course_dir(self, course_id: int) -> None:
         directory = self._course_local_dir(course_id)

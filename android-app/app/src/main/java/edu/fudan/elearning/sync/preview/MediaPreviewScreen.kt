@@ -49,7 +49,11 @@ import java.io.File
  * 生命周期结束时主动释放播放器，避免后台泄漏。
  */
 @Composable
-fun MediaPreviewScreen(file: File) {
+fun MediaPreviewScreen(
+    file: File,
+    initialPositionSec: Int = -1,
+    onPositionChanged: (sec: Int, totalSec: Int) -> Unit = { _, _ -> }
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -107,10 +111,26 @@ fun MediaPreviewScreen(file: File) {
         }
     }
 
+    // v1.1.2：恢复上次播放位置（就绪后 seekOnce）
+    LaunchedEffect(isReady, initialPositionSec) {
+        if (isReady && initialPositionSec > 0) {
+            // 恢复到上次位置的前 2 秒，避免从句子正中间断开
+            player.seekTo((initialPositionSec - 2).coerceAtLeast(0) * 1000L)
+        }
+    }
+
     // 进度刷新：currentPosition 可直接读取，无需命令可用性判断
     LaunchedEffect(player) {
+        var lastReportedSec = -1
         while (true) {
             position = player.currentPosition.coerceAtLeast(0L)
+            // v1.1.2：每 2 秒上报一次播放位置（离开页面时已留下近 2 秒内的记录）
+            val sec = (position / 1000).toInt()
+            val totalSec = (duration / 1000).toInt()
+            if (totalSec > 0 && sec != lastReportedSec && sec % 2 == 0) {
+                lastReportedSec = sec
+                onPositionChanged(sec, totalSec)
+            }
             delay(500)
         }
     }

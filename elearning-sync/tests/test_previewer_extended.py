@@ -45,6 +45,8 @@ def _office_result_holder():
     holder._claim_office_result = MethodType(
         DocumentPreviewDialog._claim_office_result, holder
     )
+    # v1.1.2：真实对话框在转换后会恢复阅读进度；测试桩只需无操作占位
+    holder._restore_progress = lambda: None
     return holder
 
 
