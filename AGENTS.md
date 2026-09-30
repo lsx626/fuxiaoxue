@@ -82,7 +82,7 @@
 
 **v1.2.0 发布验收（2026-09-30）**：v1.1.1（观感与操控）+ v1.1.2（阅读体验）合并发布为 v1.2.0（双端；桌面 VERSION/`__init__.py`/setup.iss 与 Android versionCode 16/versionName 1.2.0）。测试：桌面 149 passed、Android JVM 109 passed、插桩 38 passed（fxx_test_api36 无头模拟器，`am instrument` 通道）。Windows EXE 与安装器**无 Authenticode 签名**（本机无证书，`NotSigned` 如实记录）；未运行 connectedDebugAndroidTest（本轮 Android 行为改动由插桩 38 项覆盖）。
 
-`v1.2.1`（开发中，未发布；双端预览链路审计修复，全部为显示/资源层，数据语义不变）：
+`v1.2.1`（2026-09-30 发布；桌面 VERSION/`__init__.py`/setup.iss = 1.2.1，Android versionCode 17/versionName 1.2.1；双端预览链路审计修复，全部为显示/资源层，数据语义不变）：
 
 - **桌面 Office 迟到结果按源文件校验**（回归）：`_OfficeRenderSignals.finished` 扩为 `(path, dir, source)`，`_on_office_rendered` 丢弃翻文件后到达的旧转换结果（此前旧 PDF 会覆盖新文件预览且泄漏新文件的临时目录）；`_navigate_sibling` 停止并释放旧 `QMediaPlayer/QAudioOutput/QVideoWidget` 及其信号（此前旧 player 的 positionChanged 会驱动新控件、污染进度列，旧实例累积存活）。
 - **桌面进度写库长连接 + 防抖**（回归）：对话框持有单个 `StateStore`（`_progress_store()`，`_cleanup_resources` 关闭），不再每翻一页/每 2 秒新建连接跑建表脚本并抢类级写锁；页码变化改 500ms `QTimer` 防抖（与 Android 口径一致，也修正了本文档此前「桌面 500ms 防抖」的错误宣称——v1.2.0 前桌面端并无防抖）。
@@ -100,7 +100,7 @@
 - **Android PDF 取消窗口**：`PdfPreviewScreen` 在 `PdfPageSource` 赋值后检查 `coroutineContext.isActive`，取消时立即关闭 renderer/pfd（此前 onDispose 已跑过、句柄只能等 finalizer）。
 - **Android 图片解码失败占位**：`ImagePreviewScreen` 的 `AsyncImage` 加 `onError` → 结构化错误卡（此前纯黑背景无说明）。
 
-**测试**：桌面 151 passed（新增 2 项：`test_office_result_for_previous_sibling_is_discarded`、`test_decode_text_bytes_handles_bom_encodings_and_gb18030`）。
+**测试**：桌面 151 passed（新增 2 项：`test_office_result_for_previous_sibling_is_discarded`、`test_decode_text_bytes_handles_bom_encodings_and_gb18030`）；Android JVM 109 passed + `lintDebug` 通过；插桩 38 OK（`-gpu guest` 无头模拟器通道——`swiftshader_indirect` 无头渲染会挂死，见 §17）。
 
 ## 2. 信息优先级
 
