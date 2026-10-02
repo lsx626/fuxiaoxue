@@ -129,9 +129,10 @@ def test_unread_first_sorting(tmp_path):
 
 
 def test_pdf_fallback_renders_all_pages(tmp_path):
-    """PyMuPDF 降级现在渲染全部页面（v1.1.2 前只有第一页）。"""
+    """PyMuPDF 降级为所有页建立占位（v1.2.3 起按需渲染，位图只在可见时装载）。"""
     import fitz
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication, QScrollArea
     from fudan_sync.gui.previewer import DocumentPreviewDialog, _detect_type
     from types import SimpleNamespace
 
@@ -145,17 +146,40 @@ def test_pdf_fallback_renders_all_pages(tmp_path):
     doc.close()
 
     assert _detect_type(pdf_path) == "pdf"
+    timer = QTimer()
+    timer.setSingleShot(True)
+    timer.setInterval(120)
     holder = SimpleNamespace(
         _show_unsupported_card=lambda *args: None,
         _show_image_preview=lambda *args: None,
+        preview_area=QScrollArea(),
         _pdf_fallback_scroll=None,
         _pdf_fallback_pages=[],
+        _pdf_fallback_doc=None,
+        _pdf_fallback_rendered=set(),
+        _pdf_fallback_render_width=900,
+        _pdf_fallback_page_count=0,
+        _pdf_fallback_timer=timer,
+        # SimpleNamespace 不能自动绑定类方法，手动注入
+        _pdf_fallback_target_width=lambda: 900,
     )
+    # 未 show 的控件上 mapTo 几何无效，渲染函数应安全返回而非崩溃
+    holder._schedule_fallback_render = lambda: timer.start()
     holder._set_preview_widget = lambda widget: collected.append(widget)
     collected = []
 
     DocumentPreviewDialog._load_pdf_fallback(holder, pdf_path)
-    # 每渲染成功一页就追加一条 (index, label)；三页 PDF 应得三条
+    # 每页都有一条占位记录（版面高度已保留）；三页 PDF 应得三条
     assert len(holder._pdf_fallback_pages) == 3
     assert [index for index, _label in holder._pdf_fallback_pages] == [0, 1, 2]
     assert collected  # 已挂到预览区
+    # v1.2.3：文档句柄保持打开（供按需渲染读取页面），总页数记录准确
+    assert holder._pdf_fallback_doc is not None
+    assert holder._pdf_fallback_page_count == 3
+    # 初始时尚无任何位图（定时器延迟渲染）
+    assert holder._pdf_fallback_rendered == set()
+    holder._pdf_fallback_doc.close()
+
+    # 按需渲染一次：未 show 时几何全零，应安全地一页都不渲染
+    DocumentPreviewDialog._render_visible_fallback_pages(holder)
+    assert holder._pdf_fallback_rendered == set()

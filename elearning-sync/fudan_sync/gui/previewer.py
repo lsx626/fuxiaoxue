@@ -26,16 +26,25 @@ from time import monotonic
 from typing import List, Optional, Sequence
 from xml.etree import ElementTree as ET
 
-from PySide6.QtCore import QObject, QUrl, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication, QKeySequence, QMovie, QPixmap, QShortcut
+from PySide6.QtCore import QObject, QPoint, QUrl, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QGuiApplication,
+    QKeySequence,
+    QMovie,
+    QPixmap,
+    QShortcut,
+    QTextCursor,
+)
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -82,6 +91,12 @@ VIDEO_EXTS = {
     ".mpg", ".mpe", ".3gp", ".3g2", ".ts", ".mts", ".m2ts", ".flv",
 }
 OFFICE_EXTS = WORD_EXTS | EXCEL_EXTS | PPT_EXTS
+
+# PyMuPDF 降级链路（v1.2.3 按需渲染）：页数上限与单页渲染 DPI 上限。
+# 一次性渲染时代（v1.1.2~v1.2.2）上限是 30 页 × 150dpi ≈ 250MB+；
+# 按需渲染后内存只随可见页走，上限可放宽到 200 页。
+_PDF_FALLBACK_PAGE_LIMIT = 200
+_PDF_FALLBACK_MAX_DPI = 150
 
 
 def _detect_type(file_path: str) -> str:
@@ -728,21 +743,32 @@ def _decode_rtf_text(content: str) -> str:
 
 
 class _OfficeRenderSignals(QObject):
-    """Marshal a native Office conversion result back to the GUI thread."""
+    """Marshal a native Office conversion / structured extraction result back
+    to the GUI thread.
 
-    # (output_path, output_dir, source_path)：source 让 GUI 能识别并丢弃
-    # 「翻文件之后才到达」的旧文件转换结果（v1.2.1 回归修复）。
+    - finished(output_path, output_dir, source_path)：COM/LibreOffice 转换结果；
+      source 让 GUI 能识别并丢弃「翻文件之后才到达」的旧结果（v1.2.1 回归修复）。
+    - extracted(payload, source_path)：结构化抽取（docx/xlsx/pptx 文本矩阵）
+      结果，payload 为 (kind, data) 或 None（v1.2.3：big docx 的解析不再阻塞 GUI）。
+    """
+
     finished = Signal(str, str, str)
+    extracted = Signal(object, str)
 
 
 class _ImagePreviewWidget(QWidget):
-    """Resize-aware image canvas used inside the dialog's scroll area."""
+    """Resize-aware image canvas used inside the dialog's scroll area.
+
+    v1.2.3 起：Ctrl+滚轮缩放（1x~8x，双击复位）——大图的局部细节此前完全
+    无法查看（永远 fit-to-window）。
+    """
 
     def __init__(self, path: str, parent=None):
         super().__init__(parent)
         self.path = path
         self._pixmap = QPixmap(path)
         self._movie: Optional[QMovie] = None
+        self._zoom = 1.0
         self._label = QLabel()
         self._label.setAlignment(Qt.AlignCenter)
         self._label.setStyleSheet(f"background: {CARD}; padding: 12px;")
@@ -766,17 +792,44 @@ class _ImagePreviewWidget(QWidget):
         available = self.size() - QSize(28, 28)
         if available.width() < 32 or available.height() < 32:
             available = QSize(max(32, self._pixmap.width()), max(32, self._pixmap.height()))
+        # 放大时目标尺寸按缩放系数外扩（缩小不低于原始 fit 尺寸）
+        target = QSize(
+            max(1, int(available.width() * self._zoom)),
+            max(1, int(available.height() * self._zoom)),
+        )
         if self._movie is not None:
             original = self._pixmap.size()
-            self._movie.setScaledSize(
-                original.scaled(available, Qt.KeepAspectRatio)
-                if not original.isEmpty() else available
-            )
+            movie_size = (original.scaled(target, Qt.KeepAspectRatio)
+                          if not original.isEmpty() else target)
+            self._movie.setScaledSize(movie_size)
+            # 放大时撑开 label，让外层 QScrollArea 出现滚动条
+            self._label.setMinimumSize(
+                movie_size if self._zoom > 1.0 else QSize(0, 0))
             return
         if self._pixmap.isNull():
             return
-        scaled = self._pixmap.scaled(available, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        scaled = self._pixmap.scaled(target, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self._label.setPixmap(scaled)
+        self._label.setMinimumSize(
+            scaled.size() if self._zoom > 1.0 else QSize(0, 0))
+
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        if event.modifiers() & Qt.ControlModifier:
+            delta = event.angleDelta().y()
+            if delta != 0:
+                factor = 1.2 if delta > 0 else 1 / 1.2
+                new_zoom = self._zoom * factor
+                # snap 到 1.0 附近，避免浮点漂移让「双击复位」失灵
+                self._zoom = max(1.0, min(8.0, new_zoom))
+                self._refresh()
+                event.accept()
+                return
+        super().wheelEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        self._zoom = 1.0
+        self._refresh()
+        super().mouseDoubleClickEvent(event)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -821,9 +874,22 @@ class DocumentPreviewDialog(QDialog):
         self._file_id: Optional[int] = None
         self._sibling_paths: List[str] = []
         self._last_saved_position = -1
+        # v1.2.3：Ctrl+F 的上一次关键词（查找框回显用）
+        self._last_find_keyword = ""
         self._pdf_page = 0
         self._pdf_fallback_scroll: Optional[QScrollArea] = None
         self._pdf_fallback_pages: List[tuple] = []
+        # v1.2.3：按需渲染需要保持 fitz.Document 打开、记录已渲染页
+        self._pdf_fallback_doc = None
+        self._pdf_fallback_rendered: set = set()
+        self._pdf_fallback_render_width = 900
+        # 真实总页数（用于进度列；可能大于已装订的 render_limit）
+        self._pdf_fallback_page_count = 0
+        # QTimer 不挂父对象：构造 holder（SimpleNamespace）也能跑（见测试）
+        self._pdf_fallback_timer = QTimer()
+        self._pdf_fallback_timer.setSingleShot(True)
+        self._pdf_fallback_timer.setInterval(120)
+        self._pdf_fallback_timer.timeout.connect(self._render_visible_fallback_pages)
         self._last_media_save_ms = 0
         # v1.2.1：媒体续读的待 seek 位置（LoadedMedia 后应用）
         self._pending_media_seek_ms = 0
@@ -848,6 +914,8 @@ class DocumentPreviewDialog(QDialog):
         self._office_render_started = False
         self._office_signals = _OfficeRenderSignals(self)
         self._office_signals.finished.connect(self._on_office_rendered)
+        # v1.2.3：结构化抽取（工作线程）的结果回传
+        self._office_signals.extracted.connect(self._on_structured_extracted)
         self._office_thread: Optional[threading.Thread] = None
         self.setWindowTitle(f"预览 · {os.path.basename(self.file_path)}")
         self.setWindowIcon(app_icon())
@@ -915,6 +983,9 @@ class DocumentPreviewDialog(QDialog):
         prev_shortcut.activated.connect(lambda: self._navigate_sibling(-1))
         next_shortcut = QShortcut(QKeySequence("Alt+Right"), self)
         next_shortcut.activated.connect(lambda: self._navigate_sibling(1))
+        # v1.2.3：Ctrl+F 在文本/HTML 预览里查找（.handler 里按控件类型过滤）
+        find_shortcut = QShortcut(QKeySequence.Find, self)
+        find_shortcut.activated.connect(self._find_in_preview)
         button_row.addWidget(self.open_default_btn)
         button_row.addWidget(self.close_btn)
         layout.addLayout(button_row)
@@ -1040,7 +1111,8 @@ class DocumentPreviewDialog(QDialog):
                     pass
             return (self._pdf_page, total, False)
         if self._pdf_fallback_scroll is not None:
-            return (self._fallback_visible_page(), len(self._pdf_fallback_pages), False)
+            return (self._fallback_visible_page(),
+                    self._pdf_fallback_page_count or len(self._pdf_fallback_pages), False)
         widget = self.preview_area.widget()
         if widget is not None and hasattr(widget, "verticalScrollBar"):
             bar = widget.verticalScrollBar()
@@ -1149,6 +1221,9 @@ class DocumentPreviewDialog(QDialog):
         self._pdf_document = None
         self._pdf_fallback_scroll = None
         self._pdf_fallback_pages = []
+        # v1.2.3：关闭旧文档句柄并清空已渲染记录（新文件会重新按需渲染）
+        self._close_pdf_fallback_doc()
+        self._pdf_fallback_rendered.clear()
         self._last_saved_position = -1
         self._last_media_save_ms = 0
         self._pending_media_seek_ms = 0
@@ -1240,10 +1315,13 @@ class DocumentPreviewDialog(QDialog):
         self._progress_save_timer.start()
 
     def _load_pdf_fallback(self, path: Optional[str] = None) -> None:
-        """PyMuPDF 降级：渲染全部页面（纵向连续滚动，与 Android 链路观感一致）。
+        """PyMuPDF 降级：纵向连续滚动，**按需渲染可见页**（v1.2.3）。
 
-        v1.1.2 前只渲染第一页，长文档基本不可读。超大 PDF 出于内存安全限制
-        首批渲染 30 页，并在页脚如实标注总页数。
+        v1.1.2 前只渲染第一页；v1.1.2~v1.2.2 一次性渲染前 30 页 150dpi 位图
+        （30 页 A4 ≈ 250MB+，页数还被硬限制在 30）。现在所有页都建占位
+        label（保留版面高度），只有进入视口 ± 一屏范围的页才真正渲染，
+        远离视口的页释放位图——内存只随可见页数（约 2~3 张）走，页数上限
+        因此可以放宽到 200 页。
         """
         path = path or self.file_path
         try:
@@ -1253,54 +1331,146 @@ class DocumentPreviewDialog(QDialog):
                 "PDF 预览组件不可用",
                 "当前环境缺少 PDF 渲染组件，您可以使用系统默认应用打开此文件。")
             return
+        doc = None
+        failure = ""
         try:
-            with fitz.open(path) as doc:
-                page_count = doc.page_count
-                if not page_count:
-                    raise RuntimeError("PDF 没有任何页面")
-                render_limit = min(page_count, 30)
-                container = QWidget()
-                layout = QVBoxLayout(container)
-                layout.setContentsMargins(0, 0, 0, 0)
-                layout.setSpacing(14)
-                labels: List[tuple] = []
-                for index in range(render_limit):
-                    pix = doc[index].get_pixmap(dpi=150)
-                    image = QPixmap()
-                    if not image.loadFromData(pix.tobytes("png")):
-                        continue
-                    page_label = QLabel()
-                    page_label.setPixmap(image)
-                    page_label.setAlignment(Qt.AlignCenter)
-                    layout.addWidget(page_label)
-                    labels.append((index, page_label))
-                    footer = QLabel(f"第 {index + 1} / {page_count} 页")
-                    footer.setAlignment(Qt.AlignCenter)
-                    footer.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
-                    layout.addWidget(footer)
-                if page_count > render_limit:
-                    note = QLabel(
-                        f"为控制内存占用，此处渲染前 {render_limit} 页；"
-                        f"PDF 共 {page_count} 页，可「在默认应用打开」查看完整内容。")
-                    note.setWordWrap(True)
-                    note.setAlignment(Qt.AlignCenter)
-                    note.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px; padding: 12px;")
-                    layout.addWidget(note)
-                layout.addStretch()
-                scroll = QScrollArea()
-                scroll.setWidgetResizable(True)
-                scroll.setFrameShape(QFrame.NoFrame)
-                scroll.setStyleSheet(
-                    f"QScrollArea {{ background: {CARD}; border: 1px solid {BORDER};"
-                    f" border-radius: 12px; }}")
-                scroll.setWidget(container)
-                self._pdf_fallback_scroll = scroll
-                self._pdf_fallback_pages = labels
-                self._set_preview_widget(scroll)
-        except Exception:  # pylint: disable=broad-except
+            doc = fitz.open(path)
+            page_count = doc.page_count
+            if not page_count:
+                raise RuntimeError("PDF 没有任何页面")
+            render_limit = min(page_count, _PDF_FALLBACK_PAGE_LIMIT)
+            target_width = self._pdf_fallback_target_width()
+            self._pdf_fallback_render_width = target_width
+            self._pdf_fallback_page_count = page_count
+            container = QWidget()
+            layout = QVBoxLayout(container)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(14)
+            labels: List[tuple] = []
+            for index in range(render_limit):
+                rect = doc[index].rect
+                ratio = (rect.height / rect.width) if rect.width > 0 else 1.4142
+                page_label = QLabel()
+                page_label.setAlignment(Qt.AlignCenter)
+                page_label.setText("加载中…")
+                page_label.setMinimumSize(target_width, int(target_width * ratio))
+                page_label.setStyleSheet(
+                    "background: #FFFFFF; color: #9CA3AF; font-size: 13px; border: none;")
+                layout.addWidget(page_label)
+                labels.append((index, page_label))
+                footer = QLabel(f"第 {index + 1} / {page_count} 页")
+                footer.setAlignment(Qt.AlignCenter)
+                footer.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
+                layout.addWidget(footer)
+            if page_count > render_limit:
+                note = QLabel(
+                    f"为控制内存占用，此处仅装订前 {render_limit} 页；"
+                    f"PDF 共 {page_count} 页，可「在默认应用打开」查看完整内容。")
+                note.setWordWrap(True)
+                note.setAlignment(Qt.AlignCenter)
+                note.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px; padding: 12px;")
+                layout.addWidget(note)
+            layout.addStretch()
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setStyleSheet(
+                f"QScrollArea {{ background: {CARD}; border: 1px solid {BORDER};"
+                f" border-radius: 12px; }}")
+            scroll.setWidget(container)
+            self._pdf_fallback_doc = doc
+            doc = None  # 所有权移交给预览器，由 cleanup 关闭
+            self._pdf_fallback_scroll = scroll
+            self._pdf_fallback_pages = labels
+            self._pdf_fallback_rendered.clear()
+            self._set_preview_widget(scroll)
+            scroll.verticalScrollBar().valueChanged.connect(self._schedule_fallback_render)
+            # 布局完成后再渲染首批可见页
+            self._pdf_fallback_timer.start(200)
+        except Exception as exc:  # pylint: disable=broad-except
+            failure = f"{type(exc).__name__}: {exc}"
+            if doc is not None:
+                try:
+                    doc.close()
+                except Exception:  # pylint: disable=broad-except
+                    pass
+        if failure:
+            # v1.2.3：区分「缺组件」与「打开/渲染失败」，并把异常类型写进文案——
+            # 旧的静默吞异常让真实根因永远看不到
             self._show_unsupported_card(
-                "PDF 预览组件不可用",
-                "当前环境缺少 PDF 渲染组件，您可以使用系统默认应用打开此文件。")
+                "PDF 预览失败",
+                f"无法渲染此 PDF（{failure}）。您可以使用系统默认应用打开此文件。")
+
+    def _pdf_fallback_target_width(self) -> int:
+        """占位页的像素宽度：尽量铺满视口，且在无法得知时取 900。"""
+        try:
+            width = self.preview_area.viewport().width() - 24
+        except Exception:  # pylint: disable=broad-except
+            width = 0
+        return max(600, width if width > 600 else 900)
+
+    def _schedule_fallback_render(self) -> None:
+        """滚动停顿时（120ms 防抖）才渲染，滚动途中不逐页解码。"""
+        self._pdf_fallback_timer.start()
+
+    def _close_pdf_fallback_doc(self) -> None:
+        """关闭 PyMuPDF 降级链路保持打开的文档句柄（v1.2.3）。"""
+        doc = self._pdf_fallback_doc
+        self._pdf_fallback_doc = None
+        if doc is not None:
+            try:
+                doc.close()
+            except Exception:  # pylint: disable=broad-except
+                pass
+
+    def _render_visible_fallback_pages(self) -> None:
+        """渲染视口 ± 一屏内的页；远离视口的页释放位图（LRU 式回收）。"""
+        doc = self._pdf_fallback_doc
+        scroll = self._pdf_fallback_scroll
+        pages = self._pdf_fallback_pages
+        if doc is None or scroll is None or not pages:
+            return
+        try:
+            viewport = scroll.viewport()
+            view_height = viewport.height()
+        except RuntimeError:
+            return
+        if view_height <= 0:
+            return
+        band = view_height  # 前后各留一屏缓冲
+        rendered = self._pdf_fallback_rendered
+        for index, label in pages:
+            try:
+                pos = label.mapTo(viewport, QPoint(0, 0))
+            except RuntimeError:
+                return
+            label_top = pos.y()
+            label_bottom = label_top + label.height()
+            if label_bottom < -band or label_top > view_height + band:
+                # 远离视口：释放位图回退为占位（label 高度由 minimumSize 保留，
+                # 版面不跳动）
+                if index in rendered:
+                    label.setPixmap(QPixmap())
+                    label.setText("加载中…")
+                    rendered.discard(index)
+                continue
+            if index in rendered:
+                continue
+            try:
+                page = doc[index]
+                rect = page.rect
+                # 渲染宽度对齐占位 label 的宽度，位图落盘后版面不跳动；
+                # dpi 由「目标像素宽 / 页面点宽」换算，并限制在 72~150
+                dpi = max(72, min(_PDF_FALLBACK_MAX_DPI,
+                                  int(72 * self._pdf_fallback_render_width / max(1, rect.width))))
+                pix = page.get_pixmap(dpi=dpi)
+                image = QPixmap()
+                if image.loadFromData(pix.tobytes("png")):
+                    label.setText("")
+                    label.setPixmap(image)
+                    rendered.add(index)
+            except Exception:  # pylint: disable=broad-except
+                continue
 
     # -- images -------------------------------------------------------
     def _load_image_preview(self) -> None:
@@ -1480,39 +1650,142 @@ class DocumentPreviewDialog(QDialog):
     def _load_office_preview(self) -> None:
         ext = os.path.splitext(self._original_file_path)[1].lower()
         if self._office_renderer_available():
-            loading = QLabel("正在生成完整预览…")
-            loading.setAlignment(Qt.AlignCenter)
-            loading.setStyleSheet(f"background: {CARD}; color: {TEXT_SECONDARY}; padding: 40px;")
-            self._set_preview_widget(loading)
+            # v1.2.3：不再是静态文案——带进度的可取消卡片，大文档转换时用户
+            # 能随时放弃并改用结构化降级或默认应用打开。
+            self._set_preview_widget(self._office_loading_card())
             self._start_office_render()
             return
         self._load_structured_office_preview(ext)
 
+    def _office_loading_card(self) -> QWidget:
+        """COM/LibreOffice 转换期间的进度卡：可取消、可改用默认应用。"""
+        card = QWidget()
+        card.setStyleSheet(f"background: {CARD};")
+        outer = QVBoxLayout(card)
+        outer.setAlignment(Qt.AlignCenter)
+        outer.setContentsMargins(40, 60, 40, 60)
+        inner = QFrame()
+        inner.setObjectName("card")
+        inner.setMaximumWidth(520)
+        inner_layout = QVBoxLayout(inner)
+        inner_layout.setContentsMargins(24, 20, 24, 20)
+        inner_layout.setSpacing(10)
+        title = QLabel("正在生成完整预览…")
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet(f"font-size: 15px; font-weight: 600; color: {TEXT};")
+        inner_layout.addWidget(title)
+        desc = QLabel("正在调用 Microsoft Office / LibreOffice 转换文档。\n"
+                      "大文档可能需要数十秒，可以随时取消。")
+        desc.setAlignment(Qt.AlignCenter)
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 13px;")
+        inner_layout.addWidget(desc)
+        progress = QProgressBar()
+        progress.setRange(0, 0)  # 不确定进度（转换时长不可预估）
+        progress.setTextVisible(False)
+        progress.setFixedHeight(6)
+        inner_layout.addWidget(progress)
+        button_row = QHBoxLayout()
+        button_row.setSpacing(10)
+        cancel_btn = QPushButton("取消转换")
+        cancel_btn.setToolTip("放弃转换，改用结构化文本预览")
+        cancel_btn.clicked.connect(self._cancel_office_render)
+        button_row.addStretch()
+        button_row.addWidget(cancel_btn)
+        open_btn = QPushButton("在默认应用打开")
+        open_btn.clicked.connect(self._open_in_default_app)
+        button_row.addWidget(open_btn)
+        button_row.addStretch()
+        inner_layout.addLayout(button_row)
+        outer.addWidget(inner)
+        return card
+
+    def _cancel_office_render(self) -> None:
+        """用户取消：通知工作线程放弃，并立即显示结构化降级（不等结果）。"""
+        self._office_cancel_event.set()
+        ext = os.path.splitext(self._original_file_path)[1].lower()
+        self._load_structured_office_preview(ext)
+
+    @staticmethod
+    def _structured_extraction(ext: str, path: str) -> Optional[tuple]:
+        """选择对应的结构化抽取器；返回 (kind, data) 或 None（无可抽取内容）。"""
+        if ext == ".rtf":
+            return None  # RTF 预览走文本解码路径，不进结构化分支
+        if ext in {".docx", ".docm", ".odt", ".ott"}:
+            blocks = _extract_docx_blocks(path)
+            return ("text", blocks) if blocks else None
+        if ext in {".xlsx", ".xlsm", ".xltx", ".ods", ".ots"}:
+            rows = _extract_xlsx_rows(path)
+            return ("rows", rows) if rows else None
+        if ext in {".pptx", ".pptm", ".ppsx", ".odp", ".otp"}:
+            slides = _extract_pptx_slides(path)
+            return ("slides", slides) if slides else None
+        return None
+
     def _load_structured_office_preview(self, ext: str) -> None:
-        """Show readable Office content when no page renderer is available."""
+        """Show readable Office content when no page renderer is available.
+
+        v1.2.3：抽取（python-docx/openpyxl/python-pptx 解析大文档可达数秒）
+        移到工作线程，GUI 只显示「正在解析…」；结果经信号回传，翻文件/关闭
+        后到达的旧结果按源路径与 cleaned_up 双重判据丢弃。
+        """
+        source = self._original_file_path
         if ext == ".rtf":
             self._load_rtf_preview()
             return
-        if ext in {".docx", ".docm", ".odt", ".ott"}:
-            blocks = _extract_docx_blocks(self._original_file_path)
-            if blocks:
-                self._show_text_blocks(blocks, title="文档内容")
-                return
-        if ext in {".xlsx", ".xlsm", ".xltx", ".ods", ".ots"}:
-            rows = _extract_xlsx_rows(self._original_file_path)
-            if rows:
-                self._show_spreadsheet_rows(rows)
-                return
-        if ext in {".pptx", ".pptm", ".ppsx", ".odp", ".otp"}:
-            slides = _extract_pptx_slides(self._original_file_path)
-            if slides:
-                self._show_slide_text(slides)
-                return
-        self._show_unsupported_card(
-            "Office 文档预览",
-            "无法在当前环境解析此文件。安装 Microsoft Office 或 LibreOffice 后可显示完整页面，"
-            "也可以使用下方按钮在系统默认应用中打开。",
+        if ext not in {".docx", ".docm", ".odt", ".ott",
+                       ".xlsx", ".xlsm", ".xltx", ".ods", ".ots",
+                       ".pptx", ".pptm", ".ppsx", ".odp", ".otp"}:
+            self._show_unsupported_card(
+                "Office 文档预览",
+                "无法在当前环境解析此文件。安装 Microsoft Office 或 LibreOffice 后可显示完整页面，"
+                "也可以使用下方按钮在系统默认应用中打开。",
+            )
+            return
+        loading = QLabel("正在解析文档内容…")
+        loading.setAlignment(Qt.AlignCenter)
+        loading.setStyleSheet(f"background: {CARD}; color: {TEXT_SECONDARY}; padding: 40px;")
+        self._set_preview_widget(loading)
+        signals = self._office_signals
+
+        def extract() -> None:
+            # 异常吞掉：payload=None 时 GUI 回退到「无法解析」卡片
+            payload = None
+            try:
+                payload = self._structured_extraction(ext, source)
+            except Exception:  # pylint: disable=broad-except
+                payload = None
+            try:
+                signals.extracted.emit(payload, source)
+            except RuntimeError:
+                pass
+
+        thread = threading.Thread(
+            target=extract,
+            name="office-structured-extract",
+            daemon=True,
         )
+        thread.start()
+
+    def _on_structured_extracted(self, payload: Optional[tuple], source: str) -> None:
+        """结构化抽取结果回到 GUI 线程：先校验来源，再构建控件。"""
+        with self._resource_lock:
+            if self._cleaned_up or source != self._original_file_path:
+                return
+        if payload is None:
+            self._show_unsupported_card(
+                "Office 文档预览",
+                "无法解析此文件的内容（可能为空文档或格式不兼容）。"
+                "可以尝试在系统默认应用中打开。",
+            )
+            return
+        kind, data = payload
+        if kind == "text":
+            self._show_text_blocks(data, title="文档内容")
+        elif kind == "rows":
+            self._show_spreadsheet_rows(data)
+        elif kind == "slides":
+            self._show_slide_text(data)
 
     def _office_renderer_available(self) -> bool:
         if any(shutil.which(name) for name in ("soffice", "libreoffice")):
@@ -1593,6 +1866,11 @@ class DocumentPreviewDialog(QDialog):
             if output_dir:
                 shutil.rmtree(output_dir, ignore_errors=True)
             return
+        # v1.2.3：用户已取消（或已关闭）时到达的结果整体丢弃
+        if self._office_cancel_event.is_set():
+            if output_dir:
+                self._discard_office_result(output_dir)
+            return
         # v1.2.1：翻文件后迟到的旧转换结果必须整体丢弃，否则旧 PDF 会覆盖
         # 新文件的预览，且新文件的临时目录被孤立泄漏。
         if source and os.path.abspath(source) != os.path.abspath(self._original_file_path):
@@ -1612,6 +1890,27 @@ class DocumentPreviewDialog(QDialog):
         self._load_structured_office_preview(
             os.path.splitext(self._original_file_path)[1].lower()
         )
+
+    # -- 查找（v1.2.3）-------------------------------------------------
+    def _find_in_preview(self) -> None:
+        """Ctrl+F：在文本/HTML/Office 结构化预览里顺序查找，支持绕回。"""
+        widget = self.preview_area.widget()
+        if not isinstance(widget, (QPlainTextEdit, QTextBrowser)):
+            return
+        keyword, accepted = QInputDialog.getText(
+            self, "查找", "输入要查找的内容：", text=self._last_find_keyword or "")
+        if not accepted or not keyword.strip():
+            return
+        self._last_find_keyword = keyword
+        if widget.find(keyword):
+            return
+        # 到尾部未命中：绕回开头再找一次
+        cursor = widget.textCursor()
+        cursor.movePosition(QTextCursor.Start)
+        widget.setTextCursor(cursor)
+        if widget.find(keyword):
+            return
+        QMessageBox.information(self, "查找", f"未找到「{keyword}」。")
 
     def _show_text_blocks(self, blocks: Sequence[str], title: str = "") -> None:
         text_edit = QPlainTextEdit()
@@ -2119,6 +2418,12 @@ class DocumentPreviewDialog(QDialog):
                 pass
         if self._image_widget is not None and self._image_widget._movie is not None:
             self._image_widget._movie.stop()
+        # v1.2.3：关闭按需渲染保持打开的 PyMuPDF 文档句柄，并停止滚动监听定时器
+        self._close_pdf_fallback_doc()
+        try:
+            self._pdf_fallback_timer.stop()
+        except (RuntimeError, AttributeError):
+            pass
         if self._pdf_view is not None:
             try:
                 self._pdf_view.setDocument(None)

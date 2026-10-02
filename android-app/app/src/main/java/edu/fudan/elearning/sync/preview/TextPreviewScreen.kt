@@ -27,6 +27,14 @@ import java.io.File
 private const val MAX_BYTES = 2L * 1024 * 1024
 
 /**
+ * v1.2.3：渐进式渲染参数——一次把 2 MiB 的正文全部丢给一个 Text 布局，
+ * 滚动和排版都会明显卡顿。先渲染前 [INITIAL_SHOWN_CHARS] 个字符，
+ * 滚到接近底部时按 [MORE_CHARS] 分块扩展。
+ */
+private const val INITIAL_SHOWN_CHARS = 64 * 1024
+private const val MORE_CHARS = 64 * 1024
+
+/**
  * 应用内文本/代码/CSV/Markdown 预览。
  *
  * 硬性约束：最多读取 [MAX_BYTES] 字节，分块流式解码，禁止一次性把超大文件塞入内存。
@@ -82,11 +90,23 @@ fun TextPreviewScreen(file: File) {
                     )
                 }
                 val scroll = rememberScrollState()
+                // v1.2.3：渐进渲染——只渲染「当前已展开」的部分，滚到底部附近再扩展
+                var shownChars by remember(fileKey) { mutableStateOf(INITIAL_SHOWN_CHARS) }
+                val displayed = remember(content, shownChars) {
+                    if (content.length > shownChars) content.substring(0, shownChars) else content
+                }
+                LaunchedEffect(scroll.value, scroll.maxValue, displayed.length, content.length) {
+                    if (content.length > displayed.length &&
+                        scroll.maxValue - scroll.value < 1500
+                    ) {
+                        shownChars += MORE_CHARS
+                    }
+                }
                 Box(
                     Modifier.fillMaxSize().verticalScroll(scroll).padding(12.dp)
                 ) {
                     Text(
-                        text = content,
+                        text = displayed,
                         style = MaterialTheme.typography.bodyMedium.copy(
                             fontFamily = FontFamily.Monospace,
                             lineHeight = MaterialTheme.typography.bodyMedium.lineHeight * 1.4f

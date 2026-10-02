@@ -103,10 +103,23 @@ fun MediaPreviewScreen(
     }
 
     // 生命周期：后台暂停，离开组合时释放；player 切换（翻文件）时也释放旧实例
+    // v1.2.3：回到前台时，如果暂停前正在播放则自动续播（ON_PAUSE 里记住状态）
     DisposableEffect(lifecycleOwner, player) {
+        var wasPlayingBeforePause = false
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
-                player.pause()
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> {
+                    wasPlayingBeforePause = player.isPlaying
+                    player.pause()
+                }
+                Lifecycle.Event.ON_STOP -> player.pause()
+                Lifecycle.Event.ON_RESUME -> {
+                    if (wasPlayingBeforePause) {
+                        player.play()
+                        wasPlayingBeforePause = false
+                    }
+                }
+                else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

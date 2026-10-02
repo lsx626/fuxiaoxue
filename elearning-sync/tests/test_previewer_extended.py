@@ -38,6 +38,8 @@ def _office_result_holder():
         _cleaned_up=False,
         _resource_lock=threading.Lock(),
         _pending_office_dirs=set(),
+        # v1.2.3：转换取消判据（_on_office_rendered 丢弃用户已取消的结果）
+        _office_cancel_event=threading.Event(),
         _original_file_path="lesson.docx",
         _temp_pdf_path=None,
         _temp_pdf_dir=None,
@@ -506,6 +508,34 @@ def test_office_result_for_previous_sibling_is_discarded(tmp_path):
     # 新文件的路径没有被旧结果污染
     assert holder.file_path == "lesson.docx"
     assert holder._temp_pdf_path is None
+
+
+def test_structured_extraction_result_for_previous_sibling_is_discarded(tmp_path):
+    """v1.2.3：结构化抽取在工作线程跑，翻文件后到达的旧结果按源路径丢弃。"""
+    shown = []
+    unsupported = []
+    holder = SimpleNamespace(
+        _cleaned_up=False,
+        _resource_lock=threading.Lock(),
+        _original_file_path=str(tmp_path / "new.docx"),
+        _show_text_blocks=lambda blocks, title="": shown.append(blocks),
+        _show_spreadsheet_rows=lambda rows: shown.append(rows),
+        _show_slide_text=lambda slides: shown.append(slides),
+        _show_unsupported_card=lambda title, desc: unsupported.append(title),
+    )
+
+    DocumentPreviewDialog._on_structured_extracted(
+        holder, ("text", ["旧内容"]), str(tmp_path / "old.docx"))
+    assert shown == []
+    assert unsupported == []
+
+    DocumentPreviewDialog._on_structured_extracted(
+        holder, ("text", ["新内容"]), str(tmp_path / "new.docx"))
+    assert shown == [["新内容"]]
+
+    DocumentPreviewDialog._on_structured_extracted(
+        holder, None, str(tmp_path / "new.docx"))
+    assert unsupported == ["Office 文档预览"]
 
 
 def test_office_worker_cleans_output_after_dialog_is_destroyed(tmp_path):

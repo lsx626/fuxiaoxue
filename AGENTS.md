@@ -112,6 +112,19 @@
 
 **测试**：桌面 155 passed（新增 4 项：403 不重试且点名锁定、401 熔断跳过排队文件、登录页正文一次即熔断、`mark_locked` 落库可见）；Android JVM 109 passed（改 2 项断言：扩展名不再跳过、含 case 的课程 HTML 不是登录页）+ `lintDebug` 通过。
 
+`v1.2.3`（2026-10-02 发布；桌面 1.2.3 / Android versionCode 19；预览体验「五加三」，全部为显示/资源层）：
+
+- **桌面 Office 结构化抽取移出 GUI 线程**（#4）：`_load_structured_office_preview` 改为工作线程解析（python-docx/openpyxl/python-pptx 解析大文档可达数秒），结果经 `_OfficeRenderSignals.extracted(payload, source)` 回传，翻文件后到达的旧结果按源路径 + `cleaned_up` 双重判据丢弃（回归测试 `test_structured_extraction_result_for_previous_sibling_is_discarded`）。
+- **桌面 Office 转换进度卡 + 可取消**（#10）：`_office_loading_card` 取代静态文案——不确定进度条 +「取消转换」（置 `_office_cancel_event` 并立即转结构化降级）+「在默认应用打开」；用户已取消后到达的转换结果在 `_on_office_rendered` 里整体丢弃（#5 的用户可控面；COM 调用本身不可打断，但工作线程是 daemon、结果被丢弃，不再卡住用户）。
+- **桌面图片缩放**（#8）：`_ImagePreviewWidget` 支持 Ctrl+滚轮 1x~8x 缩放、双击复位；放大时 label 最小尺寸撑开外层 `QScrollArea` 出滚动条（此前永远 fit-to-window，大图细节无法查看）。
+- **桌面 Ctrl+F 查找**（#9）：文本/HTML/Office 结构化预览里 `QKeySequence.Find` 调出输入框，`QPlainTextEdit.find`/`QTextBrowser.find` 顺序查找并支持绕回；关键词记忆回显。
+- **桌面 PDF 降级改按需渲染**（#11）：所有页建占位 label（版面高度按页面宽高比保留），只有进入视口 ± 一屏的页才渲染位图、远离视口的页释放——内存只随可见页（约 2~3 张）走，不再一次性渲染 30 页 ≈ 250MB+；页数上限因此从 30 放宽到 200；滚动 120ms 防抖后才渲染；`fitz.Document` 句柄在翻文件/关闭时经 `_close_pdf_fallback_doc` 关闭；降级异常不再静默吞（区分「缺组件」与「打开/渲染失败」并把异常类型写进错误文案）。进度列 total 用真实总页数。
+- **Android 文本渐进渲染**（#9）：`TextPreviewScreen` 先渲染前 64 KiB 字符，滚到底部 1500px 内按 64 KiB 分块扩展——此前 2 MiB 正文一次丢给单个 `Text` 布局，滚动与排版卡顿。
+- **Android PDF 宽高比预取**（#11）：`PdfPageSource.prefetchAspects()` 在 IO 线程预算全部页宽高比，组合期 `aspectOf` 退化为缓存查找（此前每张可见页在主线程 `openPage`）。
+- **Android 媒体回前台续播**（#12）：`MediaPreviewScreen` 生命周期观察者在 ON_PAUSE 记住播放状态，ON_RESUME 若此前在播放则自动续播（此前切回应用需手动按播放）。
+
+**测试**：桌面 156 passed（新增 1 项结构化抽取竞态测试，PDF 降级测试随按需渲染语义更新）；Android JVM 109 passed + `lintDebug` 通过；真实对话框冒烟（文本/CSV/图片/docx + Ctrl+F 命中 + 图片双击复位）通过。
+
 ## 2. 信息优先级
 
 发生冲突时按以下优先级判断：

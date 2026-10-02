@@ -51,6 +51,9 @@ fun PdfPreviewScreen(
                 }
                 source = PdfPageSource(pfd, renderer)
                 loadState = PdfLoadState.Ready(renderer.pageCount)
+                // v1.2.3：页宽高比在 IO 线程预算好，组合期的 aspectOf 就只是一次
+                // 缓存查找——此前每张可见页都在主线程 openPage，长文档滚动卡顿
+                source?.prefetchAspects()
                 // v1.2.1：取消窗口——构造 PdfRenderer 期间翻文件或退出预览时，
                 // onDispose 已经跑过且当时 source 还是 null，新构造的句柄必须在这
                 // 里主动关闭，否则只能等 finalizer 兜底（可能永不释放）。
@@ -127,6 +130,22 @@ private class PdfPageSource(
         }
         aspects[index] = a
         return a
+    }
+
+    /** v1.2.3：IO 线程预算全部页宽高比，之后组合期不再触碰 openPage。 */
+    fun prefetchAspects() {
+        synchronized(renderer) {
+            for (index in 0 until renderer.pageCount) {
+                if (index in aspects) continue
+                runCatching {
+                    renderer.openPage(index).use { p ->
+                        if (p.width > 0 && p.height > 0) {
+                            aspects[index] = p.width.toFloat() / p.height.toFloat()
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /** 以 2 倍清晰度渲染单页；长边上限 [MAX_PAGE_DIMEN]，防止位图过大 OOM。 */
