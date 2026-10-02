@@ -284,6 +284,19 @@ Android Studio 里对应设置为：**Settings → Build, Execution, Deployment 
 
 两者共同结论：推送或 Release API 失败时，先用上面那条 curl 经代理探活，再决定是「代理挂了」还是「DNS 污染需要走代理」。
 
+**代理彻底挂掉时的免代理发布方案（v1.2.3 实测，2026-10-02）**：代理进程死了、hosts 改不了（无管理员）时仍有第三条路——**污染是按域名分的**：`api.github.com`（20.205.243.168）与 `uploads.github.com`（CNAME → 20.205.243.161）本地解析即为真实 IP，**直连可用**（`curl --noproxy '*'`，Release 全流程免代理）；只有 `github.com` 本体被污染。推送办法：
+
+1. 摸真实 IP：扫 `20.205.243.160~175`，`curl --noproxy '*' --resolve github.com:443:<ip> -o NUL -w '%{http_code}' https://github.com/lsx626/fuxiaoxue` 返回 200 的那台（本轮是 `20.205.243.166`；IP 会漂，每次重扫）。
+2. 用 IP 字面 URL 推远端 + **强制 Host 头**（否则 401/400；libcurl 对 IP 字面 URL 不发 SNI，光给 Host 头就够路由）：
+   ```powershell
+   $env:NO_PROXY = '*'
+   $token = (Get-Content '.gh-token' | Select-Object -First 1).Trim()
+   git -c http.proxy= -c http.sslVerify=false -c credential.helper= `
+       -c http.extraHeader='Host: github.com' `
+       push "https://oauth2:$token@20.205.243.166/lsx626/fuxiaoxue.git" main vX.Y.Z
+   ```
+   两个已验证的坑：① GitHub 的 git 端点**只认 Basic，不认 Bearer**——`Authorization: Bearer` 头会被 401「No anonymous write access」（`www-authenticate: Basic realm="GitHub"`）打回，必须把 token 以 `oauth2:<token>` 嵌进 URL 走 Basic；② `-c http.<url>.extraHeader` 的 URL 分区匹配对 IP 字面 URL 不可靠，`http.extraHeader`（全局）才生效。`http.sslVerify=false` 是因为无 SNI 连接的证书主机名肯定对不上（服务端 `Server: GitHub-Babel/3.0`、`x-github-edge-region` 可确认落到真 GitHub 边缘而非中间盒）。DoH（dns.google / 1.1.1.1）在本机被墙，只能靠扫段。
+
 **无 `gh` CLI 时的 Release 流程（v1.2.0 实测）**：令牌在本机根目录 `.gh-token`（已被 `.gitignore` 排除）。GitHub API 的 JSON 体**必须无 BOM**（`Set-Content -Encoding UTF8` 带 BOM 会被 API 拒收 `Problems parsing JSON`），且 PowerShell 传内联 JSON 给 curl 时引号会被吃掉——正确做法是把体写入临时文件再用 `--data-binary "@file.json"`，JSON 体本身用 Python 的 `json.dumps` 生成最可靠：
 
 ```powershell
