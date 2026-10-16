@@ -45,6 +45,7 @@ class DatabaseHelper(context: Context) :
                 downloaded_at TEXT,
                 url TEXT DEFAULT '',
                 updated_at TEXT DEFAULT '',
+                error TEXT DEFAULT '',
                 FOREIGN KEY(course_id) REFERENCES courses(id) ON DELETE CASCADE
             )"""
         )
@@ -65,6 +66,7 @@ class DatabaseHelper(context: Context) :
         createSearchTables(db)
         // v4：阅读进度（预览恢复、进度列、未读优先排序）
         createReadingProgressTable(db)
+        createTextCache(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -76,6 +78,16 @@ class DatabaseHelper(context: Context) :
         if (oldVersion < 2) migrateV1ToV2(db)
         if (oldVersion < 3) migrateV2ToV3(db)
         if (oldVersion < 4) migrateV3ToV4(db)
+        if (oldVersion < 5) addColumnIfMissing(db, "files", "error", "TEXT DEFAULT ''")
+        if (oldVersion < 6) {
+            createTextCache(db)
+            // FTS4 columns have no affinity: older string-bound deletes missed
+            // integer file IDs. Keep the newest index row for each existing ID.
+            runCatching {
+                db.execSQL("DELETE FROM files_fts WHERE rowid NOT IN " +
+                    "(SELECT MAX(rowid) FROM files_fts GROUP BY CAST(file_id AS INTEGER))")
+            }
+        }
     }
 
     override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -108,8 +120,7 @@ class DatabaseHelper(context: Context) :
 
     private fun createReadingProgressTable(db: SQLiteDatabase) {
         // position：页码（0 起）或媒体播放秒，由 is_media 区分
-        runCatching {
-            db.execSQL(
+        db.execSQL(
                 """CREATE TABLE IF NOT EXISTS reading_progress (
                     file_id INTEGER PRIMARY KEY,
                     course_id INTEGER DEFAULT 0,
@@ -119,7 +130,12 @@ class DatabaseHelper(context: Context) :
                     updated_at TEXT DEFAULT ''
                 )"""
             )
-        }
+    }
+
+    private fun createTextCache(db: SQLiteDatabase) {
+        db.execSQL("""CREATE TABLE IF NOT EXISTS file_text_cache (
+            file_id INTEGER PRIMARY KEY, text TEXT NOT NULL DEFAULT ''
+        )""")
     }
 
     private fun createSearchTables(db: SQLiteDatabase) {
@@ -132,8 +148,8 @@ class DatabaseHelper(context: Context) :
                 )"""
             )
         }
+        // Core tables must fail the transaction if creation fails.
         // 作业截止日期（v3）：不从 files 表分离，因为作业未必有附件文件
-        runCatching {
             db.execSQL(
                 """CREATE TABLE IF NOT EXISTS assignments (
                     id INTEGER PRIMARY KEY,
@@ -144,9 +160,7 @@ class DatabaseHelper(context: Context) :
                     fetched_at TEXT DEFAULT ''
                 )"""
             )
-        }
         // 同步变更摘要（v3）：文件级 diff，通知与「最近变更」视图的来源
-        runCatching {
             db.execSQL(
                 """CREATE TABLE IF NOT EXISTS sync_changes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,12 +172,13 @@ class DatabaseHelper(context: Context) :
                     occurred_at TEXT DEFAULT ''
                 )"""
             )
-        }
     }
 
     private fun addColumnIfMissing(db: SQLiteDatabase, table: String, column: String, spec: String) {
         if (hasColumn(db, table, column)) return
-        runCatching { db.execSQL("ALTER TABLE $table ADD COLUMN $column $spec") }
+        // SQLiteOpenHelper wraps upgrades in a transaction. Propagate failures so
+        // it rolls back instead of recording a newer version with missing columns.
+        db.execSQL("ALTER TABLE $table ADD COLUMN $column $spec")
     }
 
     private fun hasColumn(db: SQLiteDatabase, table: String, column: String): Boolean {
@@ -185,8 +200,9 @@ class DatabaseHelper(context: Context) :
          * v2 新增 files.updated_at 与 sync_runs 的失败信息；
          * v3 新增 files_fts（搜索）、assignments（截止日期）、sync_changes（变更摘要），
          * 全部为**新增表**，老数据不动；
-         * v4 新增 reading_progress（阅读进度），同样是纯加表。
+         * v4 新增 reading_progress（阅读进度），同样是纯加表；
+         * v5 补 files.error（v1.2.2 已读写此列，但此前建库与迁移均遗漏）。
          */
-        const val SCHEMA_VERSION = 4
+        const val SCHEMA_VERSION = 6
     }
 }

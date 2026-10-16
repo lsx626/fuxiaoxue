@@ -10,7 +10,7 @@ from weakref import ref
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import (QAction, QColor, QFont, QFontMetrics, QGuiApplication,
                            QKeySequence, QShortcut, QTextCursor)
-from PySide6.QtWidgets import (QAbstractItemView, QFrame,
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame,
                                QGridLayout, QHBoxLayout, QHeaderView, QLabel,
                                QLineEdit, QMainWindow, QMenu, QMessageBox,
                                QProgressBar, QPushButton, QSplitter, QStatusBar,
@@ -165,8 +165,8 @@ class MainWindow(QMainWindow):
         central = QWidget()
         central.setObjectName("root")
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(24, 18, 24, 14)
-        layout.setSpacing(16)
+        layout.setContentsMargins(20, 16, 20, 12)
+        layout.setSpacing(12)
 
         layout.addWidget(self._build_header())
         layout.addWidget(self._build_stats_row())
@@ -216,18 +216,24 @@ class MainWindow(QMainWindow):
             f"padding: 5px 12px; color: {TEXT_SECONDARY};")
         header_layout.addWidget(self.user_chip)
 
-        for text, handler in (("搜索", self._open_search),
+        for text, handler in (("搜索资料", self._open_search),
                               ("截止日期", self._open_deadlines),
-                              ("最近变更", self._open_recent_changes),
-                              ("打开同步目录", self._open_root_dir),
-                              ("存储管理", self._open_storage_manager),
-                              ("设置", self._open_settings),
-                              ("日志", self._toggle_log_panel)):
+                              ("设置", self._open_settings)):
             button = QPushButton(text)
             button.setCursor(Qt.PointingHandCursor)
             button.setMinimumHeight(34)
             button.clicked.connect(handler)
             header_layout.addWidget(button)
+        more = QPushButton("更多")
+        more.setCursor(Qt.PointingHandCursor)
+        menu = QMenu(more)
+        for text, handler in (("最近变更", self._open_recent_changes),
+                              ("打开同步目录", self._open_root_dir),
+                              ("存储管理", self._open_storage_manager),
+                              ("同步日志", self._toggle_log_panel)):
+            menu.addAction(text, handler)
+        more.setMenu(menu)
+        header_layout.addWidget(more)
         return header
 
     def _build_stats_row(self) -> QWidget:
@@ -249,7 +255,7 @@ class MainWindow(QMainWindow):
         card = QFrame()
         card.setObjectName("card")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setContentsMargins(18, 10, 18, 10)
         layout.setSpacing(4)
         value_label = QLabel(value)
         value_label.setObjectName("statValue")
@@ -358,6 +364,26 @@ class MainWindow(QMainWindow):
         header_row.addWidget(self.course_count_label)
         course_layout.addLayout(header_row)
 
+        filters = QHBoxLayout()
+        filters.setContentsMargins(18, 4, 18, 10)
+        self.course_filter_edit = QLineEdit()
+        self.course_filter_edit.setPlaceholderText("查找课程名称或课程代码…")
+        self.course_filter_edit.setAccessibleName("查找课程")
+        self.course_filter_edit.setClearButtonEnabled(True)
+        self.course_filter_edit.textChanged.connect(self._apply_course_filter)
+        filters.addWidget(self.course_filter_edit, 1)
+        self.term_filter = QComboBox()
+        self.term_filter.setAccessibleName("按学期筛选课程")
+        self.term_filter.addItem("全部学期", "")
+        self.term_filter.setMaximumWidth(220)
+        self.term_filter.currentIndexChanged.connect(self._apply_course_filter)
+        filters.addWidget(self.term_filter)
+        self.open_course_button = QPushButton("查看文件")
+        self.open_course_button.setEnabled(False)
+        self.open_course_button.clicked.connect(self._show_selected_course_files)
+        filters.addWidget(self.open_course_button)
+        course_layout.addLayout(filters)
+
         self.course_table = QTableWidget(0, 7)
         self.course_table.setHorizontalHeaderLabels(
             ["课程", "学期", "文件数", "已下载", "本地大小", "最近同步", "ID"])
@@ -365,12 +391,13 @@ class MainWindow(QMainWindow):
         self.course_table.verticalHeader().setVisible(False)
         self.course_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.course_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.course_table.setFocusPolicy(Qt.NoFocus)
+        self.course_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.course_table.setWordWrap(False)
         self.course_table.setShowGrid(False)
         self.course_table.setAlternatingRowColors(False)
         self.course_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.course_table.customContextMenuRequested.connect(self._course_context_menu)
-        self.course_table.doubleClicked.connect(self._toggle_file_list)
+        self.course_table.activated.connect(self._toggle_file_list)
         self.course_table.itemSelectionChanged.connect(self._on_course_selection_changed)
 
         header = self.course_table.horizontalHeader()
@@ -397,15 +424,15 @@ class MainWindow(QMainWindow):
 
         file_header_row = QHBoxLayout()
         file_header_row.setContentsMargins(18, 10, 18, 4)
-        self.file_panel_title = QLabel("课程文件")
+        self.file_panel_title = ElidedLabel("课程文件")
         self.file_panel_title.setObjectName("cardTitle")
-        file_header_row.addWidget(self.file_panel_title)
-        file_header_row.addStretch()
+        file_header_row.addWidget(self.file_panel_title, 1)
         self.file_filter_edit = QLineEdit()
         self.file_filter_edit.setPlaceholderText("过滤本课程文件…（Ctrl+F）")
         self.file_filter_edit.setClearButtonEnabled(True)
         self.file_filter_edit.setMaximumWidth(220)
         self.file_filter_edit.setMinimumHeight(30)
+        self.file_filter_edit.setAccessibleName("查找本课程文件")
         self.file_filter_edit.setStyleSheet(
             f"QLineEdit {{ background: {CARD}; border: 1px solid #E2E7F1;"
             f" border-radius: 8px; padding: 4px 10px; color: {TEXT}; }}")
@@ -416,18 +443,42 @@ class MainWindow(QMainWindow):
         file_header_row.addWidget(self.file_count_label)
         file_layout.addLayout(file_header_row)
 
+        file_actions = QHBoxLayout()
+        file_actions.setContentsMargins(18, 4, 18, 8)
+        self.file_status_filter = QComboBox()
+        self.file_status_filter.setAccessibleName("按状态筛选文件")
+        for text, value in (("全部文件", ""), ("未读", "unread"),
+                            ("已下载", "downloaded"), ("下载失败", "failed"),
+                            ("待下载", "pending"), ("已锁定", "locked")):
+            self.file_status_filter.addItem(text, value)
+        self.file_status_filter.currentIndexChanged.connect(
+            lambda: self._apply_file_filter(self.file_filter_edit.text()))
+        file_actions.addWidget(self.file_status_filter)
+        file_actions.addStretch()
+        resume = QPushButton("继续阅读")
+        resume.clicked.connect(lambda: self._resume_reading(self._current_file_course_id))
+        file_actions.addWidget(resume)
+        self.preview_button = QPushButton("预览所选文件")
+        self.preview_button.setObjectName("primary")
+        self.preview_button.setEnabled(False)
+        self.preview_button.clicked.connect(self._preview_selected_file)
+        file_actions.addWidget(self.preview_button)
+        file_layout.addLayout(file_actions)
+
         self.file_table = QTableWidget(0, 5)
         self.file_table.setHorizontalHeaderLabels(
             ["文件名", "大小", "状态", "阅读进度", "下载时间"])
         self.file_table.verticalHeader().setVisible(False)
         self.file_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.file_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.file_table.setFocusPolicy(Qt.NoFocus)
+        self.file_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.file_table.setWordWrap(False)
         self.file_table.setShowGrid(False)
         self.file_table.setAlternatingRowColors(False)
         self.file_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.file_table.customContextMenuRequested.connect(self._file_context_menu)
-        self.file_table.doubleClicked.connect(self._preview_selected_file)
+        self.file_table.activated.connect(self._preview_selected_file)
+        self.file_table.itemSelectionChanged.connect(self._update_file_actions)
 
         file_header = self.file_table.horizontalHeader()
         file_header.setSectionResizeMode(0, QHeaderView.Stretch)
@@ -628,8 +679,8 @@ class MainWindow(QMainWindow):
     def _confirm_full_sync(self) -> None:
         confirm = QMessageBox.question(
             self, "全量同步",
-            "将忽略本地状态，重新比对并下载全部课程内容（文件已存在且未变更时会自动跳过，"
-            "不会重复下载）。确认继续吗？",
+            "将重新下载全部未被排除、且有权访问的课程文件，即使本地已有相同文件。"
+            "这可能消耗较多时间和流量。确认继续吗？",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if confirm == QMessageBox.Yes:
             self._start_sync(full=True)
@@ -694,9 +745,6 @@ class MainWindow(QMainWindow):
             self._on_log("warning", f"本轮同步有 {stats['errors']} 个错误，详见日志面板")
             self._log_visible = True
             self.log_panel.setVisible(True)
-        # 如果当前展开了文件列表，同步后刷新
-        if self._file_panel_visible and self._current_file_course_id is not None:
-            self._populate_file_list(self._current_file_course_id)
 
     def _on_sync_failed(self, message: str) -> None:
         self._set_busy(False)
@@ -761,6 +809,17 @@ class MainWindow(QMainWindow):
         self.stat_size.setText(format_size(stats.get("bytes", 0) or 0))
         self.stat_last.setText(_relative_time(last.get("finished_at")) if last else "从未")
 
+        selected_id = self._selected_course_id()
+        self._courses = courses
+        selected_term = self.term_filter.currentData()
+        self.term_filter.blockSignals(True)
+        self.term_filter.clear()
+        self.term_filter.addItem("全部学期", "")
+        for term in sorted({c.get("term") for c in courses if c.get("term")}, reverse=True):
+            self.term_filter.addItem(term, term)
+        self.term_filter.setCurrentIndex(max(0, self.term_filter.findData(selected_term)))
+        self.term_filter.blockSignals(False)
+        self.course_table.blockSignals(True)
         self.course_table.setRowCount(len(courses))
         for row, course in enumerate(courses):
             self._set_table_item(
@@ -781,13 +840,42 @@ class MainWindow(QMainWindow):
                 row, 4, format_size(course.get("bytes_downloaded") or 0), align_right=True)
             self._set_table_item(row, 5, _relative_time(course.get("last_synced_at")))
             self._set_table_item(row, 6, str(course.get("id")))
-        self.course_count_label.setText(
-            f"共 {len(courses)} 门课程 · {format_size(stats.get('bytes', 0) or 0)}")
-        self.course_empty_label.setVisible(not courses)
+        if selected_id is not None:
+            self._select_course_row(selected_id)
+        self.course_table.blockSignals(False)
+        self._apply_course_filter()
+        if self._file_panel_visible and self._current_file_course_id is not None:
+            self._populate_file_list(self._current_file_course_id)
+
+    def _apply_course_filter(self, *_args) -> None:
+        courses = getattr(self, "_courses", [])
+        query = self.course_filter_edit.text().strip().casefold()
+        term = self.term_filter.currentData()
+        shown = 0
+        for row, course in enumerate(courses):
+            matches = (not term or course.get("term") == term) and (
+                not query or query in " ".join(str(course.get(key) or "")
+                                               for key in ("name", "code")).casefold())
+            self.course_table.setRowHidden(row, not matches)
+            shown += int(matches)
+        if self.course_table.currentRow() >= 0 and self.course_table.isRowHidden(
+                self.course_table.currentRow()):
+            self.course_table.clearSelection()
+            self.course_table.setCurrentItem(None)
+            self.file_panel.hide()
+            self._file_panel_visible = False
+            self._current_file_course_id = None
+        self.open_course_button.setEnabled(self._selected_course_id() is not None)
+        self.course_count_label.setText(f"{shown} / {len(courses)} 门课程")
+        self.course_empty_label.setText(
+            "没有匹配的课程，试试其他名称或学期。" if courses else
+            "暂无课程。登录并点击「立即同步」开始同步课程文件。")
+        self.course_empty_label.setVisible(shown == 0)
 
     def _set_table_item(self, row: int, column: int, text: str,
                         bold: bool = False, align_right: bool = False) -> None:
         item = QTableWidgetItem(text)
+        item.setToolTip(text)
         if align_right:
             item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
         else:
@@ -822,12 +910,24 @@ class MainWindow(QMainWindow):
 
     def _on_course_selection_changed(self) -> None:
         """课程选中行变化时，如果文件列表已展开，则刷新显示对应课程的文件。"""
+        self.open_course_button.setEnabled(self._selected_course_id() is not None)
         if not self._file_panel_visible:
             return
         course_id = self._selected_course_id()
         if course_id is not None and course_id != self._current_file_course_id:
             self._current_file_course_id = course_id
             self._populate_file_list(course_id)
+
+    def _show_selected_course_files(self) -> None:
+        course_id = self._selected_course_id()
+        if course_id is not None:
+            self._current_file_course_id = course_id
+            self._populate_file_list(course_id)
+            self.file_panel.show()
+            self._file_panel_visible = True
+
+    def _update_file_actions(self) -> None:
+        self.preview_button.setEnabled(bool(self._selected_file_path()))
 
     def _populate_file_list(self, course_id: int) -> None:
         """加载并显示指定课程的文件列表。"""
@@ -866,11 +966,18 @@ class MainWindow(QMainWindow):
         # v1.1.2：未读优先排序——没读过的排前面，读过的按最近阅读时间降序。
         # 用户的学习节奏是「把没读的读完」，而不是按目录字母序。
         progress = getattr(self, "_course_reading_progress", {}) or {}
+        status = self.file_status_filter.currentData()
+        if status == "unread":
+            filtered = [f for f in filtered if f.get("status") == "downloaded"
+                        and not int((progress.get(f.get("file_id")) or {}).get("position") or 0)]
+        elif status:
+            filtered = [f for f in filtered if f.get("status") == status]
         filtered = self._sort_files_unread_first(filtered, progress)
         self._render_file_rows(filtered)
+        self._update_file_actions()
         total = len(files)
         shown = len(filtered)
-        if query.strip():
+        if query.strip() or status:
             self.file_count_label.setText(
                 f"共 {total} 个文件 · 命中 {shown} 项" if total else "暂无文件")
         else:
@@ -879,7 +986,7 @@ class MainWindow(QMainWindow):
             self.file_empty_label.setText("该课程还没有同步任何文件。")
             self.file_empty_label.setVisible(True)
         elif not filtered:
-            self.file_empty_label.setText("没有匹配当前关键字的文件。")
+            self.file_empty_label.setText("没有符合当前条件的文件，可清空关键字或切换为「全部文件」。")
             self.file_empty_label.setVisible(True)
         else:
             self.file_empty_label.setVisible(False)
@@ -942,7 +1049,7 @@ class MainWindow(QMainWindow):
         if not position:
             return ("未读", ACCENT)
         if total:
-            percent = min(100, int(position * 100 / max(total, 1)))
+            percent = min(100, int((position + 1) * 100 / max(total, 1)))
             return (f"第 {position + 1} / {total} 页 · {percent}%", SUCCESS)
         return (f"第 {position + 1} 页", SUCCESS)
 
@@ -1028,6 +1135,8 @@ class MainWindow(QMainWindow):
         """
         if self.preview_dialog is dialog:
             self.preview_dialog = None
+            if self._file_panel_visible and self._current_file_course_id is not None:
+                self._populate_file_list(self._current_file_course_id)
 
     # ==================================================================
     # 搜索
@@ -1077,6 +1186,8 @@ class MainWindow(QMainWindow):
             return
         course_id = record.get("course_id")
         if course_id is not None:
+            self.course_filter_edit.clear()
+            self.term_filter.setCurrentIndex(0)
             self._current_file_course_id = course_id
             self._select_course_row(course_id)
             self._populate_file_list(course_id)
@@ -1177,8 +1288,6 @@ class MainWindow(QMainWindow):
     def _on_storage_files_deleted(self, count: int) -> None:
         """存储管理中删除文件后的回调。"""
         self._refresh_stats()
-        if self._file_panel_visible and self._current_file_course_id is not None:
-            self._populate_file_list(self._current_file_course_id)
 
     def _on_storage_closed(self, state: StateStore) -> None:
         """存储管理对话框关闭后，刷新统计和课程列表，并关闭状态库。"""

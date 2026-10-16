@@ -150,7 +150,7 @@ class SearchInstrumentedTest {
         repo.upsertFileIndex(101, "hidden.txt", "这里有一段关于神经网络的讨论")
         val hits = repo.searchFiles("神经网络")
         assertEquals(1, hits.size)
-        assertTrue("摘要应标记命中片段", hits[0].snippet.contains("["))
+        assertTrue("摘要必须来自原文而非预分词文本", hits[0].snippet.contains("关于神经网络的讨论"))
         repo.close()
         helper.close()
     }

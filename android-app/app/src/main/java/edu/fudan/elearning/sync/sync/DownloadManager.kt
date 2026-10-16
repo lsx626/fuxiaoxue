@@ -2,6 +2,9 @@ package edu.fudan.elearning.sync.sync
 
 import android.content.Context
 import edu.fudan.elearning.sync.network.ApiClient
+import edu.fudan.elearning.sync.network.readCancellable
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -31,7 +34,7 @@ sealed class DownloadOutcome {
  * 1. 写入 `目标.part`；
  * 2. 已有 `.part` 用 `Range` 续传；服务端忽略 Range（返回 200）时从头重写；
  * 3. 已知远端大小时校验完整长度，不完整保留断点；
- * 4. 成功后原子改名到最终路径（先删旧文件，再 rename，同目录内 rename 是原子的）；
+ * 4. 成功后原子替换最终路径，替换失败时保留旧副本和断点；
  * 5. 失败按指数退避重试；会话失效/登录页 HTML 立刻停止重试。
  */
 class DownloadManager(
@@ -40,7 +43,7 @@ class DownloadManager(
 ) {
 
     private val rootDir: File
-        get() = File(context.getExternalFilesDir(null), "elearning").apply { mkdirs() }
+        get() = File(context.getExternalFilesDir(null) ?: context.filesDir, "elearning")
 
     fun rootPath(): String = rootDir.absolutePath
 
@@ -70,10 +73,6 @@ class DownloadManager(
             dest.parentFile?.mkdirs()
             val part = DownloadPlan.partFile(dest)
 
-            // 断点已等于远端大小时直接收尾，避免多打一次请求
-            if (expectedSize > 0 && part.exists() && part.length() == expectedSize) {
-                return@withContext finalize(part, dest, expectedSize, resumed = true)
-            }
             if (expectedSize > 0 && part.exists() && part.length() > expectedSize) {
                 // 断点比远端还大：上一次的 .part 不可信，重下
                 part.delete()
@@ -81,6 +80,7 @@ class DownloadManager(
 
             var lastReason = "下载失败"
             for (attempt in 1..maxAttempts.coerceAtLeast(1)) {
+                coroutineContext.ensureActive()
                 when (val outcome = attemptOnce(url, dest, part, expectedSize)) {
                     is DownloadOutcome.Success -> return@withContext outcome
                     is DownloadOutcome.Failed -> {
@@ -93,7 +93,7 @@ class DownloadManager(
             DownloadOutcome.Failed(lastReason)
         }
 
-    private fun attemptOnce(
+    private suspend fun attemptOnce(
         url: String,
         dest: File,
         part: File,
@@ -101,13 +101,22 @@ class DownloadManager(
     ): DownloadOutcome {
         val partLength = if (part.exists()) part.length() else 0L
         val rangeHeader = DownloadPlan.rangeHeader(partLength)
-        val response = try {
-            ApiClient.download(url, rangeHeader)
+        return try {
+            ApiClient.downloadCall(url, rangeHeader).readCancellable { response, checkActive ->
+                readResponse(response, dest, part, expectedSize, partLength, checkActive)
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (error: Exception) {
-            return DownloadOutcome.Failed("网络错误：${error.message ?: error.javaClass.simpleName}")
+            DownloadOutcome.Failed("网络连接中断，请稍后重试")
         }
+    }
 
-        response.use { resp ->
+    private fun readResponse(
+        resp: okhttp3.Response, dest: File, part: File, expectedSize: Long,
+        partLength: Long, checkActive: () -> Unit
+    ): DownloadOutcome {
+            checkActive()
             when {
                 // 断点已失效（远端文件变小/被替换）
                 resp.code == 416 -> {
@@ -120,7 +129,7 @@ class DownloadManager(
                     // v1.2.2：403 最常见的原因是教师锁定了文件（答案类 .py / 压缩包 /
                     // 答案文档常被锁定），而不是登录失效——把话说准，且不因此中止其余下载。
                     return DownloadOutcome.Failed(
-                        "无权访问：该文件可能已被教师锁定", retryable = false
+                        "无权访问（HTTP 403）：该文件可能已被教师锁定", retryable = false
                     )
                 resp.code != 200 && resp.code != 206 ->
                     return DownloadOutcome.Failed(
@@ -129,9 +138,14 @@ class DownloadManager(
                     )
             }
 
+            if (resp.code == 206 && !DownloadPlan.rangeStartsAt(resp.header("Content-Range"), partLength)) {
+                part.delete()
+                return DownloadOutcome.Failed("服务器返回的续传位置不一致，将重新下载")
+            }
+
             val body = resp.body ?: return DownloadOutcome.Failed("响应内容为空")
             val contentType = body.contentType()?.toString()
-            val append = DownloadPlan.appendToPart(resp.code, rangeHeader != null)
+            val append = DownloadPlan.appendToPart(resp.code, partLength > 0)
             if (!append) part.delete()
             val head = ByteArrayOutputStream()
 
@@ -142,6 +156,7 @@ class DownloadManager(
                     DownloadPlan.partOutputStream(part, append).use { out ->
                         val buffer = ByteArray(64 * 1024)
                         while (true) {
+                            checkActive()
                             val read = input.read(buffer)
                             if (read <= 0) break
                             out.write(buffer, 0, read)
@@ -152,9 +167,11 @@ class DownloadManager(
                         }
                     }
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (error: Exception) {
                 // 保留 .part 供下次 Range 续传
-                return DownloadOutcome.Failed("网络中断：${error.message ?: error.javaClass.simpleName}")
+                return DownloadOutcome.Failed("下载中断，已保留断点，请稍后重试")
             }
 
             // 注意：ByteArrayOutputStream.toString(Charset) 是 JVM 10/Android API 33 的重载，
@@ -170,27 +187,18 @@ class DownloadManager(
                     "下载不完整（$actual/$expectedSize 字节），已保留断点继续重试"
                 )
             }
+            checkActive()
             return finalize(part, dest, actual, resumed = append)
-        }
     }
 
-    /** 原子落盘：同目录 rename；极端文件系统不支持时退化为复制后删除。 */
+    /** 同目录原子替换；不支持原子移动时请求普通替换移动，不预先删除旧副本。 */
     private fun finalize(part: File, dest: File, bytes: Long, resumed: Boolean): DownloadOutcome {
         dest.parentFile?.mkdirs()
-        if (dest.exists() && !dest.delete()) {
-            return DownloadOutcome.Failed("无法覆盖已有文件：${dest.name}", retryable = false)
-        }
-        if (part.renameTo(dest)) {
-            return DownloadOutcome.Success(dest, bytes, resumed)
-        }
         return try {
-            part.inputStream().use { input ->
-                dest.outputStream().use { output -> input.copyTo(output) }
-            }
-            part.delete()
+            DownloadPlan.commitPart(part, dest)
             DownloadOutcome.Success(dest, bytes, resumed)
         } catch (error: Exception) {
-            DownloadOutcome.Failed("写入文件失败：${error.message ?: error.javaClass.simpleName}")
+            DownloadOutcome.Failed("无法保存文件，旧副本与下载断点已保留，请检查存储空间")
         }
     }
 

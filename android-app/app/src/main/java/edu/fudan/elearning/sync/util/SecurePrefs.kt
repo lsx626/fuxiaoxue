@@ -63,6 +63,9 @@ object SecurePrefs {
             cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), GCMParameterSpec(128, iv))
             String(cipher.doFinal(encrypted), Charsets.UTF_8)
         } catch (e: Exception) {
+            // A restored backup has no matching Keystore key. Do not retain an
+            // undecryptable password and retry it forever on every launch.
+            clear(context)
             null
         }
     }

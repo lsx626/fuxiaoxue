@@ -125,6 +125,34 @@
 
 **测试**：桌面 156 passed（新增 1 项结构化抽取竞态测试，PDF 降级测试随按需渲染语义更新）；Android JVM 109 passed + `lintDebug` 通过；真实对话框冒烟（文本/CSV/图片/docx + Ctrl+F 命中 + 图片双击复位）通过。
 
+### 当前工作区：资料库与可用性优化（2026-10-16，未发布）
+
+版本入口仍为桌面/Android **1.2.3**（Android versionCode 19），不是新的发布包。新增双端课程名称/代码与学期组合筛选，以及课程内文件状态筛选；Android 文件还可按名称/目录搜索、空结果一键清除条件。筛选只影响显示，不改同步范围、数据库状态和预览兄弟清单。
+
+桌面顶栏主操作收敛为搜索资料/截止日期/设置/更多；最近变更、同步目录、存储和日志收在更多菜单。增加可见的查看文件/继续阅读/预览按钮，表格支持键盘 Enter；长课程标题省略并保留 tooltip。同步刷新保留课程选择，关闭预览后刷新进度；修正全量同步确认说明（真实行为是重新下载已有文件）与 QSS 字体列表（原代码把 Python tuple 直接插入 CSS）。
+
+Android 顶栏/正文使用主题色，截止日期随列表滚动；截止项与文件阅读进度分行避免窄屏挤压，待下载不再标成同步中；只对已下载文件提供分享入口。文件列表区分加载中/空数据/加载失败，失败可重试且取消协程照常传播。展示层筛选、排序、进度文案抽到 `ui/LibraryPresentation.kt` 并用离线测试覆盖。双端百分比按显示页码计算（最后一页 100%），位置 0 视为未读、媒体按秒计时的语义保持。
+
+**设备回归发现的既有 P0**：v1.2.2 的 `Repo.upsertFile` 开始写 `files.error`，但 `DatabaseHelper.onCreate/onUpgrade` 一直未创建这一列；v1.2.2/v1.2.3 的文件写入会抛 `no column named error`，此前 JVM/lint 无法检出。现全新建库补列，并将 schema 从 **v4 升到 v5**，旧库只 `ALTER TABLE ADD COLUMN`；加列异常不再吞掉，以便 SQLiteOpenHelper 回滚升级事务，避免版本号已升级却缺列。`DatabaseMigrationInstrumentedTest` 新增 v4→v5 保留路径/状态/阅读进度及失败原因读写的回归。不得用清库/卸载来绕过此问题。
+
+验证（2026-10-16）：桌面完整 **157 passed**，新增页码百分比回归，扩展搜索 UI 冒烟覆盖组合筛选、刷新保留选择、可见按钮与 Enter 打开；880×620 与 1200×820 在 125%/150% 缩放下用合成数据截图检查通过。Windows offscreen 不枚举系统字体，测试显式加载系统字体，避免把方框字截图当成排版验收。Android **114 JVM passed**，`lintDebug`、`assembleDebug`、`assembleDebugAndroidTest` 通过；API 36 模拟器插桩 **39 passed / 2 skipped（41 项）**，跳过项是未提供 `legacy.doc` 的两项 Office 夹具测试，并非本轮筛选/迁移用例。另跑 360dp / 深色 / 字体 1.15 倍的四页截图冒烟通过，随后恢复模拟器显示设置并关闭本轮启动的模拟器。桌面媒体退出测试曾在两端并行验收时发生一次 30s 超时，停止模拟器后串行完整重跑 157 项全绿，未改媒体代码。
+
+截图和设备测试日志分别留在已忽略的 `elearning-sync/.packaging-runtime/library-qa/` 与 `android-app/screenshots/library-qa-*`，仅含合成数据，不进仓库。本轮仅源码与 debug 验证，未提交/推送、未生成新正式安装器、未创建标签或 Release；现有 release 目录中的正式包不含上述改动。
+
+### 当前工作区续：Android 全面重构（2026-10-16～17，未发布）
+
+在上一轮双端资料库优化之上，Android 已重做登录、课程库、课程文件、动态、存储、设置、搜索与阅读控制。`HomeScreen` 仅保留自适应导航壳，功能页独立；手机底部导航、720dp 起侧栏/课程网格，统一明暗主题。截止日期和变更移到「动态」，课程内同步使用独立底栏避免遮盖文件操作。筛选、搜索和滚动状态在预览返回时保留；密码不写 saved instance state。
+
+核心修复：自动登录和 Worker 保留 Cookie 名称、无密码/网络故障可读本地库；会话应用/同步/重试/删除统一 `SyncGate`；网络读可取消并关闭响应；下载使用有界 3 路工作协程、逐项落库、续传起点校验、版本变化清旧断点、移动替换失败保留旧副本。主文件列表/作业关键记录损坏不能冒充空列表；来源不完整明确报错，成功空作业列表会清除旧待办。锁定文件保留既有本地路径；删除限定应用下载树，迟到的阅读回调不能重建已删记录。
+
+搜索设备测试发现 FTS4 的无类型亲和性列与字符串绑定参数比较导致旧索引未删除，重复更新后产生重复/旧正文命中；现显式转整数删除，迁移清理旧重复索引。当前 schema **v6**：v5 补 `files.error`，v6 加 `file_text_cache`（原文最多 64 Ki 字符）与索引去重，无课程/文件/阅读数据重建。FTS 失败走字面文件名 LIKE 降级；原文摘要替代分词串，老索引每轮最多 100 项回填。
+
+阅读器：PDF 资源在 IO 打开/预取并 finally 关闭；可见面积判页、跳页含 header、恢复后再报告进度。原生 PDF 截图发现 Surface 内两排控件叠放，已改为纵向布局并增加设备实际边界不重叠断言。媒体续播只 seek 一次，翻文件释放旧 player；文本按 8k 字符块懒加载、BOM/GB18030 解码与正文查找定位命中行；图片主题化画布、缩放/复位/加载状态，正式接入 GIF/SVG 解码器；ZIP 类目录浏览不解压；HTML 不执行脚本，只允许主动打开 http(s) 链接。网络取消会等待响应回调释放文件后再退出互斥区，避免立即重新同步时交错写同一个断点。
+
+验证：Android **136 JVM passed**，`lintDebug`（0 错误、68 warning / 1 hint）、debug 应用与测试 APK 构建通过。首轮设备为 62 passed / 2 skipped；随后新增 `android-app/tools/generate_office_fixtures.py`，从空白合成文档经本机 Word/PowerPoint 生成旧格式夹具并推入专用模拟器，再补原生 PDF 续读/反复切换与超大 PPTX 轻量副本测试，完整重跑 **66 passed / 0 skipped**。夹具含表格/图片/富文本，未读取真实文档；无 Office/夹具的其他环境仍需如实记跳过。另验收 320×600dp / 字体 1.3 倍的主页面和 5 项阅读交互（6 项通过），1280×800dp 平板导航/页面截图通过。真实账号从空库同步 61 个文件（约 1.21 GB，另 11 个教师锁定）且逐个完成长度与预览核心检查；二次增量为 0 下载/0 失败/0 重复。真实验收发现并修复「课程级 401 误判会话失效」与「含超大内嵌视频 PPTX 预览 OOM」；账号、Cookie、课程资料和数据库不得进入 Git。长期后台与旧系统真机仍未覆盖。桌面完整 157 passed。
+
+详细故障、测试矩阵与限制见 [Android 重构验收记录](android-app/REFACTOR_AUDIT.md)。版本入口仍为双端 1.2.3 / Android versionCode 19，未提交、推送或发布。Office 复杂元素保真、旧系统真机/低内存、真实 UIS/学校网络及长期后台调度仍须发布前验收；不可宣称所有缺陷已经消除。
+
 ## 2. 信息优先级
 
 发生冲突时按以下优先级判断：
@@ -374,7 +402,7 @@ CLI 默认使用当前目录的 `config.yaml`，GUI 可能使用用户数据目�
 
 - 普通设置：应用私有 `SharedPreferences("fudan_sync")`。
 - 密码：Android Keystore + AES-256-GCM 加密后存私有偏好。
-- 数据库：应用私有 `fudan_sync.db`，当前 schema **v4**（`v1.0.10` 起新增 `files.updated_at` 与 `sync_runs` 的失败信息；`v1.1.0` 起新增 `files_fts`（FTS4 全文索引）、`assignments`（作业截止日期）与 `sync_changes`（文件级变更摘要）三张**新表**，老数据不动；`v1.1.2` 起新增 `reading_progress`（阅读进度，同样纯加表））。
+- 数据库：应用私有 `fudan_sync.db`，当前工作区 schema **v6**（已发布 1.2.3 为 v4）。v2 新增 `files.updated_at` 与 `sync_runs` 失败信息；v3 新增 `files_fts`（FTS4）、`assignments` 与 `sync_changes`；v4 新增 `reading_progress`；v5 补 `files.error`；v6 新增 `file_text_cache` 原文缓存并清理派生索引重复行。课程、文件和阅读记录不动。
 - 下载：应用专属外部目录 `<external-files>/elearning/`，卸载应用时通常由系统删除。
 
 `v1.0.10` 起 `onUpgrade()` 按版本逐步执行非破坏性迁移（`ALTER TABLE ADD COLUMN`，并对已存在列做幂等判断），`onDowngrade()` 故意不动数据；只有 `oldVersion < 1`（从未发布过的异常状态）才回退到重建。**后续任何 schema 变更都必须沿用这一模式**，不得改回删表重建。
@@ -617,7 +645,7 @@ Downloader 只处理同步引擎已经判定需要下载的任务，不能再次
 ### 14.2 Android SQLite
 
 - 使用 `SQLiteOpenHelper`，不是 Room。
-- 表：`courses`、`files`、`sync_runs`，外加 `files_fts`（FTS4）、`assignments`、`sync_changes`（v1.1.0 起三张新表）与 `reading_progress`（v1.1.2 起，schema **v4**）。
+- 表：`courses`、`files`、`sync_runs`，外加 `files_fts`（FTS4）、`assignments`、`sync_changes`、`reading_progress` 与当前工作区新增的 `file_text_cache`。当前 schema **v6**：v5 补 `files.error`，v6 加原文缓存并去重索引，无课程/文件/阅读表删除或重建。
 - Android 字段少于桌面端，状态和增量元数据也不完整。
 - 不允许把桌面数据库文件导入 Android，反之亦然。
 - `v1.0.10` 起增量同时比较 status、size、远端 `updated_at`、本地文件是否存在与长度是否相符；失败状态写回 `failed` 供界面提示与重试；schema v2 迁移为只加列的非破坏性迁移，schema v3/v4 迁移为**纯加表**（`CREATE TABLE IF NOT EXISTS`，不动任何老表）。

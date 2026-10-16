@@ -1,6 +1,7 @@
 package edu.fudan.elearning.sync.sync
 
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * 进程级同步互斥闸门。
@@ -11,15 +12,24 @@ import kotlinx.coroutines.sync.Mutex
  */
 object SyncGate {
     private val mutex = Mutex()
+    private val _busy = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val busy: kotlinx.coroutines.flow.StateFlow<Boolean> = _busy
 
     val isBusy: Boolean get() = mutex.isLocked
+
+    suspend fun <T> runWaiting(block: suspend () -> T): T = mutex.withLock {
+        _busy.value = true
+        try { block() } finally { _busy.value = false }
+    }
 
     /** 拿到闸门则执行 [block]；已有同步在跑时返回 null。 */
     suspend fun <T> runOrSkip(block: suspend () -> T): T? {
         if (!mutex.tryLock()) return null
+        _busy.value = true
         return try {
             block()
         } finally {
+            _busy.value = false
             mutex.unlock()
         }
     }

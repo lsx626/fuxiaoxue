@@ -20,7 +20,7 @@ object FileTypes {
     /** 受支持的文本/代码扩展名（与桌面端 text 集合保持一致）。 */
     private val TEXT_EXTS = setOf(
         "txt", "md", "markdown", "rst", "log", "ini", "cfg", "conf", "properties",
-        "json", "xml", "yaml", "yml", "toml", "csv", "tsv", "html", "htm", "css",
+        "json", "xml", "yaml", "yml", "toml", "csv", "tsv", "html", "htm", "xhtml", "css",
         "js", "jsx", "ts", "tsx", "py", "java", "kt", "kts", "c", "h", "cpp", "hpp",
         "cs", "go", "rs", "rb", "php", "sh", "bat", "ps1", "sql", "gitignore",
         "gradle", "groovy", "scala", "swift", "dart", "vue", "srt", "vtt"
@@ -42,7 +42,7 @@ object FileTypes {
     /** 结构化降级：ODF/压缩包等无法在应用内高保真渲染的格式。 */
     private val STRUCTURED_EXTS = setOf(
         "odt", "ods", "odp",
-        "rtf", "epub", "pages", "numbers", "key", "zip", "rar", "7z", "gz",
+        "rtf", "epub", "pages", "numbers", "key", "zip", "jar", "rar", "7z", "gz",
         "tar", "bz2", "xz", "iso", "dmg", "apk", "exe", "msi"
     )
 
@@ -95,6 +95,7 @@ object FileTypes {
 
     fun isMp3(file: File): Boolean {
         val head = readHead(file, 3) ?: return false
+        if (head.size < 3) return false
         // ID3 tag 或帧同步 0xFFEx/0xFFFx
         return (head[0] == 0x49.toByte() && head[1] == 0x44.toByte() && head[2] == 0x33.toByte()) ||
             (head[0] == 0xFF.toByte() && (head[1].toInt() and 0xE0) == 0xE0)
@@ -155,7 +156,8 @@ object FileTypes {
         if (head.isEmpty()) return false
         for (b in head) if (b == 0x00.toByte()) return false
         return try {
-            String(head, Charsets.UTF_8); true
+            Charsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(head)); true
         } catch (e: Exception) {
             false
         }

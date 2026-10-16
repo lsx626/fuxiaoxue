@@ -62,6 +62,7 @@ class DatabaseMigrationInstrumentedTest {
             columns(db, "files").contains("updated_at")
         )
         val runColumns = columns(db, "sync_runs")
+        assertTrue("files.error 必须在全新安装时建出", columns(db, "files").contains("error"))
         assertTrue(runColumns.contains("files_failed"))
         assertTrue(runColumns.contains("error"))
         assertEquals(DatabaseHelper.SCHEMA_VERSION, db.version)
@@ -183,7 +184,7 @@ class DatabaseMigrationInstrumentedTest {
         // 用当前 helper 打开：触发 v3 -> v4 迁移
         val helper = DatabaseHelper(context)
         val db = helper.writableDatabase
-        assertEquals(4, db.version)
+        assertEquals(DatabaseHelper.SCHEMA_VERSION, db.version)
         assertTrue(tables(db).contains("reading_progress"))
 
         // 用户数据原样保留
@@ -201,6 +202,48 @@ class DatabaseMigrationInstrumentedTest {
         assertEquals(false, prog?.isMedia)
         repo.close()
         helper.close()
+    }
+
+    @Test
+    fun upgradeFromV4_addsFileErrorAndKeepsFilesAndReadingProgress() {
+        val legacy = SQLiteDatabase.openOrCreateDatabase(dbFile, null)
+        legacy.execSQL("""CREATE TABLE courses (
+            id INTEGER PRIMARY KEY, name TEXT NOT NULL, code TEXT DEFAULT '',
+            term TEXT DEFAULT '', last_synced_at TEXT)""")
+        legacy.execSQL("""CREATE TABLE files (
+            file_id INTEGER PRIMARY KEY, course_id INTEGER NOT NULL, name TEXT NOT NULL,
+            filename TEXT DEFAULT '', folder_path TEXT DEFAULT '', local_path TEXT DEFAULT '',
+            size INTEGER DEFAULT 0, status TEXT DEFAULT 'pending', downloaded_at TEXT,
+            url TEXT DEFAULT '', updated_at TEXT DEFAULT '')""")
+        legacy.execSQL("""CREATE TABLE reading_progress (
+            file_id INTEGER PRIMARY KEY, course_id INTEGER DEFAULT 0, position INTEGER DEFAULT 0,
+            total INTEGER DEFAULT 0, is_media INTEGER DEFAULT 0, updated_at TEXT DEFAULT '')""")
+        legacy.execSQL("INSERT INTO courses(id, name) VALUES (1, '旧课程')")
+        legacy.execSQL("""INSERT INTO files(file_id, course_id, name, local_path, status, size)
+            VALUES (10, 1, '讲义.pdf', '/synthetic/讲义.pdf', 'downloaded', 123)""")
+        legacy.execSQL("INSERT INTO reading_progress VALUES (10, 1, 7, 30, 0, 't1')")
+        legacy.version = 4
+        legacy.close()
+
+        val helper = DatabaseHelper(context)
+        val db = helper.writableDatabase
+        assertEquals(DatabaseHelper.SCHEMA_VERSION, db.version)
+        assertTrue(columns(db, "files").contains("error"))
+        helper.close()
+        val repo = Repo(context)
+        try {
+            val saved = repo.getFile(10)!!
+            assertEquals("/synthetic/讲义.pdf", saved.localPath)
+            assertEquals("downloaded", saved.status)
+            assertEquals(123L, saved.size)
+            assertEquals(7, repo.getReadingProgress(10)?.position)
+            repo.markFailed(10, "网络错误，请重试")
+            assertEquals("网络错误，请重试", repo.getFile(10)?.error)
+            repo.upsertFile(FileItem(11, 1, "新文件", error = "教师已锁定", status = "locked"))
+            assertEquals("教师已锁定", repo.getFile(11)?.error)
+        } finally {
+            repo.close()
+        }
     }
 
     @Test

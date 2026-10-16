@@ -20,6 +20,22 @@ class Prefs(context: Context) {
         get() = sp.getBoolean("only_favorites", false)
         set(value) = sp.edit().putBoolean("only_favorites", value).apply()
 
+    var backgroundSyncEnabled: Boolean
+        get() = sp.getBoolean("background_sync_enabled", true)
+        set(value) = sp.edit().putBoolean("background_sync_enabled", value).apply()
+
+    var themeMode: String
+        get() = sp.getString("theme_mode", "system") ?: "system"
+        set(value) = sp.edit().putString("theme_mode", value).apply()
+
+    var notificationPrompted: Boolean
+        get() = sp.getBoolean("notification_prompted", false)
+        set(value) = sp.edit().putBoolean("notification_prompted", value).apply()
+
+    var backgroundError: String
+        get() = sp.getString("background_error", "") ?: ""
+        set(value) = sp.edit().putString("background_error", value).apply()
+
     var loggedIn: Boolean
         get() = sp.getBoolean("logged_in", false)
         set(value) = sp.edit().putBoolean("logged_in", value).apply()

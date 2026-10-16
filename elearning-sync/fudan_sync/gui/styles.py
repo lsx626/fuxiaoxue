@@ -5,8 +5,8 @@
 """
 from __future__ import annotations
 
-FONT_FAMILY = ("Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC",
-               "Noto Sans CJK SC", "WenQuanYi Micro Hei", "Segoe UI", "sans-serif")
+FONT_FAMILY = ('"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", '
+               '"Noto Sans CJK SC", "WenQuanYi Micro Hei", "Segoe UI", sans-serif')
 
 ACCENT = "#4F46E5"
 ACCENT_HOVER = "#4338CA"

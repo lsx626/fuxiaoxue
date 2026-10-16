@@ -143,7 +143,9 @@ dependencies {
     }
 
     // 应用内预览：图片解码（含 GIF 动图）、Media3 音视频播放；PDF 使用平台 PdfRenderer
-        implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("io.coil-kt:coil-gif:2.7.0")
+    implementation("io.coil-kt:coil-svg:2.7.0")
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")
     implementation("androidx.media3:media3-common:1.4.1")

@@ -398,13 +398,17 @@ app.quit()
 def test_finished_old_preview_does_not_clear_new_preview_reference():
     old_preview = object()
     new_preview = object()
-    holder = SimpleNamespace(preview_dialog=new_preview)
+    refreshed = []
+    holder = SimpleNamespace(preview_dialog=new_preview, _file_panel_visible=True,
+                             _current_file_course_id=7, _populate_file_list=refreshed.append)
 
     from fudan_sync.gui.main_window import MainWindow
 
     MainWindow._release_preview_dialog(holder, old_preview)
     assert holder.preview_dialog is new_preview
+    assert refreshed == []
     MainWindow._release_preview_dialog(holder, new_preview)
+    assert refreshed == [7]
     assert holder.preview_dialog is None
 
 

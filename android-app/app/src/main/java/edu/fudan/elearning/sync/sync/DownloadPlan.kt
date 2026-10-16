@@ -15,6 +15,24 @@ import java.io.File
  */
 object DownloadPlan {
 
+    /** Never remove the previous good copy before its replacement is committed. */
+    fun commitPart(part: File, destination: File) {
+        try {
+            java.nio.file.Files.move(part.toPath(), destination.toPath(),
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+            java.nio.file.Files.move(part.toPath(), destination.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+
+    fun rangeStartsAt(contentRange: String?, offset: Long): Boolean {
+        val start = Regex("bytes (\\d+)-\\d+/[\\d*]+", RegexOption.IGNORE_CASE)
+            .matchEntire(contentRange.orEmpty().trim())?.groupValues?.get(1)?.toLongOrNull()
+        return start == offset
+    }
+
     /** 同名避让的最大尝试次数，超过则退回带哈希后缀的名字，避免死循环。 */
     private const val MAX_AVOID_ATTEMPTS = 200
 
@@ -70,7 +88,8 @@ object DownloadPlan {
         var candidate = fileName
         var index = 1
         while (index <= MAX_AVOID_ATTEMPTS) {
-            val occupied = candidate.lowercase() in normalized || File(dir, candidate).exists()
+            val occupied = candidate.lowercase() in normalized || File(dir, candidate).exists() ||
+                partFile(File(dir, candidate)).exists()
             if (!occupied) return File(dir, candidate)
             candidate = numberedName(base, ext, index)
             index += 1

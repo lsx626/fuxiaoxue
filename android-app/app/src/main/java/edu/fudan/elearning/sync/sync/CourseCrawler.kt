@@ -34,7 +34,8 @@ data class CrawlOutcome(
     val filesListedOk: Boolean,
     val errors: List<String> = emptyList(),
     /** 作业（带截止日期；供待办视图，v3 起）。 */
-    val assignments: List<edu.fudan.elearning.sync.network.CanvasAssignment> = emptyList()
+    val assignments: List<edu.fudan.elearning.sync.network.CanvasAssignment> = emptyList(),
+    val assignmentsListedOk: Boolean = false
 )
 
 /**
@@ -66,6 +67,7 @@ class CourseCrawler(
             folderPaths(api.getFolders(courseId))
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
+        } catch (auth: ApiException.Auth) { throw auth
         } catch (error: Exception) {
             onWarning("课程 $courseId 目录树获取失败：${error.message}")
             errors += "folders: ${error.message}"
@@ -81,6 +83,7 @@ class CourseCrawler(
             filesListedOk = true
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
+        } catch (auth: ApiException.Auth) { throw auth
         } catch (error: Exception) {
             onWarning("课程 $courseId 文件列表获取失败：${error.message}（本轮不判定远端删除）")
             errors += "course_files: ${error.message}"
@@ -116,7 +119,7 @@ class CourseCrawler(
 
         // 4) 作业（描述正文 + 附件 + 截止日期）
         val assignmentsList = mutableListOf<edu.fudan.elearning.sync.network.CanvasAssignment>()
-        runSource(errors, "assignments") {
+        val assignmentsListedOk = runSource(errors, "assignments") {
             api.getAssignments(courseId).forEach { assignment ->
                 assignmentsList += assignment
                 addReferenced(
@@ -152,7 +155,7 @@ class CourseCrawler(
             addReferenced(found, courseId, api.getSyllabus(courseId), SOURCE_SYLLABUS, "课程大纲")
         }
 
-        return CrawlOutcome(found.values.toList(), filesListedOk, errors, assignmentsList)
+        return CrawlOutcome(found.values.toList(), filesListedOk, errors, assignmentsList, assignmentsListedOk)
     }
 
     /**
@@ -217,6 +220,7 @@ class CourseCrawler(
             api.getFile(courseId, fileId)
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
+        } catch (auth: ApiException.Auth) { throw auth
         } catch (error: Exception) {
             onWarning("文件 $fileId 元数据获取失败：${error.message}")
             null
@@ -303,10 +307,11 @@ class CourseCrawler(
         errors: MutableList<String>,
         name: String,
         block: suspend () -> Unit
-    ) {
-        if (name in skipSources) return
+    ): Boolean {
+        if (name in skipSources) return false
         try {
             block()
+            return true
         } catch (cancelled: kotlinx.coroutines.CancellationException) {
             throw cancelled
         } catch (notFound: ApiException.Server) {
@@ -318,10 +323,12 @@ class CourseCrawler(
                 onWarning("课程来源 $name 获取失败：${notFound.message}")
                 errors += "$name: ${notFound.message}"
             }
+        } catch (auth: ApiException.Auth) { throw auth
         } catch (error: Exception) {
             onWarning("课程来源 $name 获取失败：${error.message}")
             errors += "$name: ${error.message}"
         }
+        return false
     }
 
     companion object {

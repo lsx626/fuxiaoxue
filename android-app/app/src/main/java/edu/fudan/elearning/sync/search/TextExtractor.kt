@@ -4,7 +4,7 @@ import android.content.Context
 import edu.fudan.elearning.sync.office.OfficeExtractor
 import edu.fudan.elearning.sync.office.OfficeParseResult
 import edu.fudan.elearning.sync.office.PageItem
-import java.nio.charset.Charset
+import kotlinx.coroutines.CancellationException
 import java.io.File
 
 /**
@@ -37,8 +37,8 @@ object TextExtractor {
      * 抽取纯文本；返回 null 表示无内容可索引（失败 / 不支持的格式）。
      * [context] 仅为 OfficeExtractor 的渲染宽度探测所需。
      */
-    suspend fun extractText(context: Context, file: File): String? = runCatching {
-        if (!file.isFile) return null
+    suspend fun extractText(context: Context, file: File): String? = try {
+        if (!file.isFile) null else {
         val ext = file.name.substringAfterLast('.', "").lowercase()
         when {
             TEXT_EXTENSIONS.contains(ext) -> extractPlain(file)
@@ -46,7 +46,9 @@ object TextExtractor {
             OfficeExtractor.isOffice(file.name) -> extractOffice(context, file)
             else -> null
         }
-    }.getOrNull()
+        }
+    } catch (cancelled: CancellationException) { throw cancelled }
+    catch (_: Exception) { null }
 
     /** 纯文本：UTF-8 优先，失败回退 GB18030/GBK。 */
     private fun extractPlain(file: File): String? {
@@ -101,17 +103,7 @@ object TextExtractor {
      * 必须用 REPORT 模式的严格解码器，才能真正区分「解码成功」与「乱码」。
      */
     internal fun decodeText(raw: ByteArray): String {
-        for (name in listOf("UTF-8", "GB18030", "GBK")) {
-            try {
-                val decoder = Charset.forName(name).newDecoder()
-                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
-                return decoder.decode(java.nio.ByteBuffer.wrap(raw)).toString()
-            } catch (error: java.nio.charset.CharacterCodingException) {
-                continue
-            }
-        }
-        return String(raw, charset("ISO-8859-1"))
+        return edu.fudan.elearning.sync.util.DocumentTexts.decode(raw, sanitize = false)
     }
 
     internal fun stripHtml(html: String): String {

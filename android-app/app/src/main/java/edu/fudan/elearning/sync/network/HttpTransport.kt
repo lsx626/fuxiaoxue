@@ -34,7 +34,8 @@ interface HttpTransport {
 /** 基于 OkHttp 的传输实现，复用带会话 Cookie 的 [ApiClient] 客户端。 */
 class OkHttpTransport : HttpTransport {
     override suspend fun get(url: String): HttpResponse = withContext(Dispatchers.IO) {
-        ApiClient.get(url).use { response ->
+        ApiClient.getCall(url).readCancellable { response, checkActive ->
+            checkActive()
             val headers = response.headers.names().associateWith { name ->
                 response.header(name) ?: ""
             }

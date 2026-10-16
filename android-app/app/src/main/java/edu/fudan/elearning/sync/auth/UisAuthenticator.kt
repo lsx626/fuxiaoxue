@@ -2,6 +2,7 @@ package edu.fudan.elearning.sync.auth
 
 import android.util.Base64
 import edu.fudan.elearning.sync.network.SessionCookieJar
+import edu.fudan.elearning.sync.network.readCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.FormBody
@@ -26,7 +27,7 @@ data class AuthSession(
 /** 登录结果封装。 */
 sealed class LoginResult {
     data class Success(val session: AuthSession) : LoginResult()
-    data class Failure(val message: String) : LoginResult()
+    data class Failure(val message: String, val retryable: Boolean = false) : LoginResult()
 }
 
 /**
@@ -68,8 +69,12 @@ class UisAuthenticator(
         withContext(Dispatchers.IO) {
             try {
                 doLogin(username, password)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: java.io.IOException) {
+                LoginResult.Failure("无法连接统一身份认证，请检查网络后重试", retryable = true)
             } catch (e: Exception) {
-                LoginResult.Failure(e.message ?: "登录失败")
+                LoginResult.Failure("登录服务返回异常，请稍后重试")
             }
         }
 
@@ -77,14 +82,13 @@ class UisAuthenticator(
     suspend fun silentLogin(username: String, password: String): LoginResult =
         login(username, password)
 
-    private fun doLogin(username: String, password: String): LoginResult {
+    private suspend fun doLogin(username: String, password: String): LoginResult {
         val idpBase = "https://id.fudan.edu.cn/idp"
 
         // Step 1: 获取登录上下文（lck/entityId 在 URL fragment 里，不在 query string）
-        val loginResp = client.newCall(
+        val fullUrl = client.newCall(
             Request.Builder().url("$baseUrl/login").get().build()
-        ).execute()
-        val fullUrl = loginResp.request.url.toString()
+        ).readCancellable { response, _ -> response.request.url.toString() }
         val lck = Regex("lck=([^&]+)").find(fullUrl)?.groupValues?.get(1) ?: ""
         var entityId = Regex("entityId=([^&]+)").find(fullUrl)?.groupValues?.get(1) ?: ""
         entityId = java.net.URLDecoder.decode(entityId, "UTF-8")
@@ -100,7 +104,7 @@ class UisAuthenticator(
                     put("entityId", entityId)
                 }.toString().toRequestBody("application/json".toMediaType()))
                 .build()
-        ).execute().use { it.body?.string() ?: "{}" }
+        ).readCancellable { response, _ -> response.body?.string() ?: "{}" }
         val methodsJson = JSONObject(authMethods)
         val methodsArr = methodsJson.optJSONArray("data")
         var authChainCode = ""
@@ -125,7 +129,7 @@ class UisAuthenticator(
         // Step 3: 获取 RSA 公钥
         val pubKeyResp = client.newCall(
             Request.Builder().url("$idpBase/authn/getJsPublicKey").post("{}".toRequestBody("application/json".toMediaType())).build()
-        ).execute().use { it.body?.string() ?: "{}" }
+        ).readCancellable { response, _ -> response.body?.string() ?: "{}" }
         val pubKeyJson = JSONObject(pubKeyResp)
         val pubKeyB64 = if (pubKeyJson.optString("code") == "200")
             pubKeyJson.optString("data") else ""
@@ -153,7 +157,7 @@ class UisAuthenticator(
                     put("authPara", authPara)
                 }.toString().toRequestBody("application/json".toMediaType()))
                 .build()
-        ).execute().use { it.body?.string() ?: "{}" }
+        ).readCancellable { response, _ -> response.body?.string() ?: "{}" }
         val execJson = JSONObject(executeResp)
         val code = execJson.optString("code")
         if (code != "200") {
@@ -171,26 +175,24 @@ class UisAuthenticator(
         }
 
         // Step 6: 回调 authnEngine，拿到 CAS ticket 跳转地址
-        val engineResp = client.newCall(
+        val engineBody = client.newCall(
             Request.Builder()
                 .url("https://id.fudan.edu.cn/idp/authCenter/authnEngine")
                 .post(FormBody.Builder().add("loginToken", loginToken).build())
                 .build()
-        ).execute()
-        val engineBody = engineResp.body?.string() ?: ""
+        ).readCancellable { response, _ -> response.body?.string().orEmpty() }
         val ticketUrl = Regex("""locationValue\s*=\s*["']([^"']+)["']""")
             .find(engineBody)?.groupValues?.get(1)
         if (!ticketUrl.isNullOrEmpty()) {
             client.newCall(
                 Request.Builder().url(ticketUrl).get().build()
-            ).execute().close()
+            ).readCancellable { _, _ -> Unit }
         }
 
         // Step 7: 访问首页，确认登录并取 CSRF
-        val homeResp = client.newCall(
+        val body = client.newCall(
             Request.Builder().url("$baseUrl/").get().build()
-        ).execute()
-        val body = homeResp.body?.string() ?: ""
+        ).readCancellable { response, _ -> response.body?.string().orEmpty() }
         // Canvas 在不同部署/登录路径下会下发 _normandy_session 或 _canvas_session，
         // 两者都必须接受，否则会出现「密码正确却提示登录失败」。
         val sessionCookie = cookieJar.cookies

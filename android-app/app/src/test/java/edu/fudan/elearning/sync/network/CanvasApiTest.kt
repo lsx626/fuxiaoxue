@@ -13,6 +13,14 @@ import org.junit.Test
  */
 class CanvasApiTest {
 
+    @Test fun invalidRecordCannotTurnListingIntoDeletionEvidence() = runBlocking {
+        for (json in listOf("[{\"id\":1}, null]", "[{\"id\":1},{\"id\":{}}]", "[{\"id\":0}]")) {
+            val transport = FakeTransport(listOf({ reply(200, json) }))
+            try { api(transport, FakeTime()).getCourseFiles(1); throw AssertionError("expected parse error") }
+            catch (_: ApiException.Parse) { }
+        }
+    }
+
     /** 一次性假传输：按调用顺序返回预设响应，用完后重复最后一个。 */
     private class FakeTransport(
         private val replies: List<() -> HttpResponse>
@@ -150,7 +158,7 @@ class CanvasApiTest {
         }
 
         assertTrue("401 必须抛 Auth，实际 $thrown", thrown is ApiException.Auth)
-        assertEquals("鉴权失败不应重试", 1, transport.calls)
+        assertEquals("鉴权失败只允许一次会话验证，不重试原请求", 2, transport.calls)
     }
 
     @Test
@@ -163,6 +171,23 @@ class CanvasApiTest {
             thrown = error
         }
         assertTrue(thrown is ApiException.Auth)
+    }
+
+    @Test
+    fun courseAccessDenied_withValidSession_isNotGlobalAuthFailure() = runBlocking {
+        val transport = FakeTransport(listOf(
+            { reply(401, "course files disabled") },
+            { reply(200, "{\"id\":1}") }
+        ))
+        var thrown: ApiException? = null
+        try {
+            api(transport, FakeTime()).getCourseFiles(42L)
+        } catch (error: ApiException) {
+            thrown = error
+        }
+        assertTrue(thrown is ApiException.Server)
+        assertEquals(401, (thrown as ApiException.Server).code)
+        assertEquals("https://host/api/v1/users/self", transport.urls.last())
     }
 
     @Test

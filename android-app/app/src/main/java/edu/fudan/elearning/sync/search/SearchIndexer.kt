@@ -4,6 +4,7 @@ import android.content.Context
 import edu.fudan.elearning.sync.data.FileItem
 import edu.fudan.elearning.sync.data.Repo
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.CancellationException
 import java.io.File
 import kotlin.coroutines.coroutineContext
 
@@ -24,12 +25,15 @@ object SearchIndexer {
      * 在调用方的协程上下文中执行（调用方应处于 IO 线程）。
      */
     suspend fun indexFile(context: Context, repo: Repo, file: FileItem) {
-        runCatching {
-            val localPath = file.localPath.takeIf { it.isNotEmpty() } ?: return@runCatching
+        try {
+            coroutineContext.ensureActive()
+            val localPath = file.localPath.takeIf { it.isNotEmpty() } ?: return
             val local = File(localPath)
             val text = if (local.isFile) TextExtractor.extractText(context, local) else null
+            coroutineContext.ensureActive()
             repo.upsertFileIndex(file.fileId, file.name, text)
-        }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { /* Indexing must not fail a completed download. */ }
     }
 
     /**

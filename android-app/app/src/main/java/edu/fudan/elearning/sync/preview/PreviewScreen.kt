@@ -1,6 +1,7 @@
 package edu.fudan.elearning.sync.preview
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -8,6 +9,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -18,6 +20,12 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.*
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -49,6 +57,7 @@ fun PreviewScreen(
     onShare: (File) -> Unit,
     // v1.1.2：预览内翻文件与阅读进度（无上下文时传默认值，预览照常工作）
     siblingCount: Int = 0,
+    siblingIndex: Int = -1,
     onNavigateSibling: (Int) -> Unit = {},
     initialPage: Int = -1,
     onPageChanged: (page: Int, total: Int) -> Unit = { _, _ -> },
@@ -58,20 +67,28 @@ fun PreviewScreen(
     val title = remember(displayName, file.name) {
         displayName.ifBlank { file.name }
     }
-    val kind = remember(file.absolutePath) {
-        if (!file.exists()) PreviewKind.UNSUPPORTED else FileTypes.detect(file)
+    val probe by produceState<Pair<Boolean, PreviewKind>?>(null, file.absolutePath) {
+        value = withContext(Dispatchers.IO) { file.isFile to FileTypes.detect(file) }
     }
-    val canPreview = file.exists() && kind != PreviewKind.UNSUPPORTED
+    val kind = probe?.second
+    val exists = probe?.first == true
+    val canPreview = exists && kind != PreviewKind.UNSUPPORTED
+    var showFind by remember(file.absolutePath) { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
+                    Column {
                     Text(
                         title,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.titleSmall
                     )
+                    if (siblingIndex >= 0) Text(stringResource(R.string.preview_file_position, siblingIndex + 1, siblingCount),
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
@@ -79,22 +96,25 @@ fun PreviewScreen(
                     }
                 },
                 actions = {
+                    if (kind == PreviewKind.TEXT && FileTypes.extOf(file.name) !in HTML_EXTENSIONS) IconButton(onClick = { showFind = !showFind }) {
+                        Icon(Icons.Default.Search, "查找正文")
+                    }
                     // 同课程的上/下一个文件（无上下文时隐藏）
                     if (siblingCount > 1) {
-                        IconButton(onClick = { onNavigateSibling(-1) }) {
+                        IconButton(onClick = { onNavigateSibling(-1) }, enabled = siblingIndex > 0) {
                             Icon(
                                 Icons.AutoMirrored.Filled.KeyboardArrowLeft,
                                 contentDescription = "上一个文件"
                             )
                         }
-                        IconButton(onClick = { onNavigateSibling(1) }) {
+                        IconButton(onClick = { onNavigateSibling(1) }, enabled = siblingIndex >= 0 && siblingIndex < siblingCount - 1) {
                             Icon(
                                 Icons.AutoMirrored.Filled.KeyboardArrowRight,
                                 contentDescription = "下一个文件"
                             )
                         }
                     }
-                    if (file.exists()) {
+                    if (exists) {
                         IconButton(onClick = { onShare(file) }) {
                             Icon(Icons.Filled.Share, contentDescription = "分享文件")
                         }
@@ -107,8 +127,10 @@ fun PreviewScreen(
         }
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
+            key(file.absolutePath) {
             when {
-                !file.exists() -> PreviewError("文件不存在，可能尚未下载或已被删除。")
+                probe == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                !exists -> PreviewError("文件不存在，可能尚未下载或已被删除。")
                 !canPreview -> PreviewError(
                     message = "暂不支持在应用内预览此格式（" +
                         FileTypes.extOf(file.name).ifEmpty { "未知类型" } +
@@ -125,7 +147,7 @@ fun PreviewScreen(
                     // html/htm 走富文本渲染（不再显示源文本），其余文本/代码走源码视图
                     PreviewKind.TEXT ->
                         if (FileTypes.extOf(file.name) in HTML_EXTENSIONS) HtmlPreviewScreen(file)
-                        else TextPreviewScreen(file)
+                        else TextPreviewScreen(file, showFind)
                     PreviewKind.MEDIA -> MediaPreviewScreen(
                         file,
                         initialPositionSec = initialMediaSec,
@@ -140,14 +162,17 @@ fun PreviewScreen(
                     PreviewKind.STRUCTURED ->
                         // v1.1.2：ODF 三格式走结构化文档视图（标题/列表/表格/图片），
                         // 其余（zip/rtf 等）仍是文本降级
-                        if (FileTypes.extOf(file.name) in ODF_EXTS) OdfDocumentScreen(file)
+                        if (FileTypes.extOf(file.name) in setOf("zip", "jar", "apk", "epub")) ArchivePreviewScreen(file)
+                        else if (FileTypes.extOf(file.name) in ODF_EXTS) OdfDocumentScreen(file)
                         else OfficeFallbackScreen(file, title)
                     PreviewKind.UNSUPPORTED -> PreviewError(
                         message = "暂不支持在应用内预览此格式。",
                         actionLabel = stringResource(R.string.preview_open_other),
                         onAction = { onShare(file) }
                     )
+                    null -> Unit
                 }
+            }
             }
         }
     }

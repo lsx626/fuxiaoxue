@@ -71,14 +71,25 @@ class CanvasApi(
 
     /** 当前用户可见课程（含学期）。 */
     suspend fun getCourses(): List<CanvasCourse> =
-        getPaged(COURSES_PATH).mapNotNull { element ->
-            runCatching { gson.fromJson(element, CanvasCourse::class.java) }.getOrNull()
+        getPaged(COURSES_PATH).map { element ->
+            val course = try { gson.fromJson(element, CanvasCourse::class.java) }
+                catch (error: Exception) { throw ApiException.Parse("课程数据格式异常", error) }
+            if (course == null || course.id <= 0 || course.name.isNullOrBlank())
+                throw ApiException.Parse("课程数据不完整，已保留本地资料")
+            course.copy(courseCode = course.courseCode.orEmpty())
         }
 
     /** 指定课程的全部文件（分页拉全）。 */
     override suspend fun getCourseFiles(courseId: Long): List<CanvasFile> =
-        getPaged(filesPath(courseId)).mapNotNull { element ->
-            runCatching { gson.fromJson(element, CanvasFile::class.java) }.getOrNull()
+        getPaged(filesPath(courseId)).map { element ->
+            // A silently dropped record would make the deletion gate trust an
+            // incomplete list. Reject the whole listing instead.
+            val file = try { gson.fromJson(element, CanvasFile::class.java) }
+                catch (error: Exception) { throw ApiException.Parse("文件数据格式异常", error) }
+            if (file == null || file.id <= 0 || file.size < 0)
+                throw ApiException.Parse("文件数据不完整，本轮不判定远端删除")
+            file.copy(displayName = file.displayName.orEmpty(), filename = file.filename.orEmpty(),
+                url = file.url.orEmpty(), updatedAt = file.updatedAt.orEmpty(), mimeClass = file.mimeClass.orEmpty())
         }
 
     // ------------------------------------------------------------------
@@ -119,8 +130,12 @@ class CanvasApi(
 
     /** 作业列表（含附件）。 */
     override suspend fun getAssignments(courseId: Long): List<CanvasAssignment> =
-        getPaged("/api/v1/courses/$courseId/assignments?per_page=100").mapNotNull {
-            runCatching { gson.fromJson(it, CanvasAssignment::class.java) }.getOrNull()
+        getPaged("/api/v1/courses/$courseId/assignments?per_page=100").map {
+            val assignment = try { gson.fromJson(it, CanvasAssignment::class.java) }
+                catch (error: Exception) { throw ApiException.Parse("作业数据格式异常", error) }
+            if (assignment == null || assignment.id <= 0 || assignment.name.isNullOrBlank())
+                throw ApiException.Parse("作业数据不完整，已保留之前的截止日期")
+            assignment.copy(attachments = assignment.attachments.orEmpty())
         }
 
     /**
@@ -156,7 +171,12 @@ class CanvasApi(
     /** 单个文件的完整元数据（引用型文件需要补签名下载地址）。 */
     override suspend fun getFile(courseId: Long, fileId: Long): CanvasFile? {
         val body = request(url("/api/v1/courses/$courseId/files/$fileId")).body
-        return runCatching { gson.fromJson(body, CanvasFile::class.java) }.getOrNull()
+        val file = try { gson.fromJson(body, CanvasFile::class.java) }
+            catch (error: Exception) { throw ApiException.Parse("文件数据格式异常", error) }
+        if (file == null || file.id != fileId || file.size < 0)
+            throw ApiException.Parse("文件数据不完整，请重新同步")
+        return file.copy(displayName = file.displayName.orEmpty(), filename = file.filename.orEmpty(),
+            url = file.url.orEmpty(), updatedAt = file.updatedAt.orEmpty(), mimeClass = file.mimeClass.orEmpty())
     }
 
     /** 当前用户显示名；解析不出来返回 null（不算失败）。 */
@@ -220,6 +240,27 @@ class CanvasApi(
 
             // 鉴权失败必须显式报错，不能降级成「空数据」
             if (reply.code == 401 || (reply.code == 403 && !rateLimited)) {
+                // Canvas also uses 401/403 for a course whose Files/Pages/etc.
+                // navigation is disabled.  Treating every such response as a
+                // dead session aborts the entire sync at the first restricted
+                // course.  Verify the session against the account endpoint:
+                // only a failed probe means the user must sign in again.
+                val selfUrl = url(SELF_PATH)
+                if (urlString != selfUrl) {
+                    val sessionProbe = try {
+                        transport.get(selfUrl)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (sessionProbe?.isSuccessful == true) {
+                        throw ApiException.Server(
+                            reply.code, urlString,
+                            "当前课程未开放此内容或没有访问权限（HTTP ${reply.code}）"
+                        )
+                    }
+                }
                 throw ApiException.Auth()
             }
             if (!policy.isRetryable(reply.code, rateLimited)) {

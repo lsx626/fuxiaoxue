@@ -74,8 +74,7 @@ fun OfficeFallbackScreen(file: File, displayName: String = file.name) {
         val text = extracted
         if (text.isNullOrBlank()) {
             Text(
-                "未提取到可读文本。该文件可能是旧版二进制格式（如 .doc/.xls/.ppt），" +
-                    "当前无法在应用内解析，请通过分享使用其他工具查看。",
+                "暂时无法在应用内预览 ${ext.uppercase()} 格式的内容，可通过右上角分享交给其他工具查看。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

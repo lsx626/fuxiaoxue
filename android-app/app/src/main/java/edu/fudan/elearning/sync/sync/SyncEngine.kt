@@ -10,11 +10,8 @@ import edu.fudan.elearning.sync.network.ApiException
 import edu.fudan.elearning.sync.network.CanvasApi
 import edu.fudan.elearning.sync.search.SearchIndexer
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -98,10 +95,13 @@ class SyncEngine(
         if (first !is DownloadOutcome.Failed) return first
         val urlExpired = first.reason.contains("404") || first.reason.contains("403")
         if (!urlExpired) return first
-        val freshUrl = runCatching { api.getFile(courseId, task.ref.fileId)?.url }
-            .getOrNull()?.takeIf { it.isNotEmpty() && it != task.ref.url }
+        val freshUrl = try { api.getFile(courseId, task.ref.fileId)?.url }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (auth: ApiException.Auth) { throw auth }
+            catch (_: Exception) { null }
+        val renewed = freshUrl?.takeIf { it.isNotEmpty() && it != task.ref.url }
             ?: return first
-        return downloader.download(freshUrl, task.dest, task.ref.size)
+        return downloader.download(renewed, task.dest, task.ref.size)
     }
 
     /** 执行一次同步。返回结果统计；失败语义见 [SyncResult]。 */
@@ -139,6 +139,7 @@ class SyncEngine(
         var fatal: ApiException? = null
 
         for ((index, canvasCourse) in validCourses.withIndex()) {
+            currentCoroutineContext().ensureActive()
             if (fatal != null) break
             onProgress(
                 "course", index + 1, validCourses.size,
@@ -181,12 +182,15 @@ class SyncEngine(
                 )
                 continue
             }
+            val sourcesIncomplete = outcome.errors.isNotEmpty()
 
             // 单课程的后续处理（路径分配、下载、落库）出现任何意外异常（磁盘满、
             // SQLite 锁等）只影响本课程，不得让整轮中止 —— 与列表失败同等处理。
             val stats = CourseStats()
             try {
-                syncCourseBody(canvasCourse, outcome, full, stats, startedAt, onProgress)
+                syncCourseBody(canvasCourse, outcome, full, stats, startedAt) { phase, done, total, message, bytes ->
+                    onProgress(phase, done, total, message, bytesDownloaded + bytes)
+                }
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (auth: ApiException) {
@@ -209,22 +213,24 @@ class SyncEngine(
                         "${error.message ?: error.javaClass.simpleName}", 0L
                 )
                 continue
+            } finally {
+                filesTotal += stats.filesTotal
+                filesDownloaded += stats.filesDownloaded
+                bytesDownloaded += stats.bytesDownloaded
+                filesFailed += stats.filesFailed
+                remoteMissing += stats.remoteMissing
             }
-
-            filesTotal += stats.filesTotal
-            filesDownloaded += stats.filesDownloaded
-            bytesDownloaded += stats.bytesDownloaded
-            filesFailed += stats.filesFailed
-            remoteMissing += stats.remoteMissing
+            if (sourcesIncomplete) failedCourses += 1
         }
 
         // 同步收尾：给本次没轮到下载的旧文件补内容索引（老库升级后分批完成）。
         // 失败与取消都不影响本轮同步结果。
-        runCatching {
+        try {
             SearchIndexer.backfill(context, repo) { message ->
                 onProgress("index", 0, 0, message, 0L)
             }
-        }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { /* Indexing can be retried on the next run. */ }
 
         val result = SyncResult(
             coursesCount = validCourses.size,
@@ -234,9 +240,10 @@ class SyncEngine(
             filesFailed = filesFailed,
             failedCourses = failedCourses,
             remoteMissing = remoteMissing,
-            error = fatal?.toResult()?.error,
+            error = fatal?.toResult()?.error ?: if (failedCourses > 0)
+                "$failedCourses 门课程未完整同步，已有本地资料仍可阅读" else null,
             needsReauth = fatal is ApiException.Auth,
-            retryable = fatal?.toResult()?.retryable == true
+            retryable = fatal?.toResult()?.retryable == true || failedCourses > 0
         )
         return record(
             startedAt, full, validCourses.size, filesTotal, bytesDownloaded, filesFailed,
@@ -316,6 +323,12 @@ class SyncEngine(
                 )
                 continue
             }
+            // A changed remote file must not inherit bytes from the old revision.
+            if (full || (existing != null && existing.updatedAt != ref.updatedAt)) {
+                DownloadPlan.partFile(dest).takeIf { it.exists() }?.let {
+                    check(it.delete()) { "无法清理旧版本断点" }
+                }
+            }
 
             tasks += DownloadTask(
                 ref = ref,
@@ -331,17 +344,12 @@ class SyncEngine(
         if (tasks.isNotEmpty()) {
             // 下载开始前先报一次总数，让界面立刻从「抓取列表」切到「下载 N 个文件」
             onProgress("file", 0, tasks.size, "开始下载 ${tasks.size} 个文件…", stats.bytesDownloaded)
-            val gate = Semaphore(DOWNLOAD_CONCURRENCY)
-            val outcomes = coroutineScope {
-                tasks.map { task ->
-                    async {
-                        gate.withPermit {
-                            task to downloadWithFreshUrlIfNeeded(canvasCourse.id, task)
-                        }
-                    }
-                }.awaitAll()
-            }
-            for ((task, download) in outcomes) {
+            var filesCompleted = 0
+            processDownloads(tasks, DOWNLOAD_CONCURRENCY,
+                download = { downloadWithFreshUrlIfNeeded(canvasCourse.id, it) }
+            ) { task, download ->
+                currentCoroutineContext().ensureActive()
+                filesCompleted += 1
                 when (download) {
                     is DownloadOutcome.Success -> {
                         stats.filesDownloaded += 1
@@ -369,7 +377,7 @@ class SyncEngine(
                             )
                         }
                         onProgress(
-                            "file", stats.filesDownloaded, tasks.size,
+                            "file", filesCompleted, tasks.size,
                             "下载：${task.displayName}", stats.bytesDownloaded
                         )
                     }
@@ -393,7 +401,7 @@ class SyncEngine(
                             )
                         )
                         onProgress(
-                            "file", stats.filesDownloaded, tasks.size,
+                            "file", filesCompleted, tasks.size,
                             "失败：${task.displayName}（${download.reason}）",
                             stats.bytesDownloaded
                         )
@@ -407,6 +415,7 @@ class SyncEngine(
 
         // v1.2.2：教师锁定的文件入清单（可见、标注原因），不参与下载
         for (ref in lockedRefs) {
+            val previous = existingRecords.firstOrNull { it.fileId == ref.fileId }
             repo.upsertFile(
                 FileItem(
                     fileId = ref.fileId,
@@ -414,10 +423,10 @@ class SyncEngine(
                     name = ref.displayName,
                     filename = ref.filename,
                     folderPath = ref.folderPath,
-                    localPath = "",
+                    localPath = previous?.localPath.orEmpty(),
                     size = ref.size,
                     status = SyncPolicy.STATUS_LOCKED,
-                    downloadedAt = null,
+                    downloadedAt = previous?.downloadedAt,
                     url = ref.url,
                     updatedAt = ref.updatedAt,
                     error = "教师已锁定，暂不开放下载"
@@ -438,7 +447,7 @@ class SyncEngine(
         }
         // 作业截止日期落库（采集失败不影响同步；正文归档仍仅桌面端做）
         runCatching {
-            if (outcome.assignments.isNotEmpty()) {
+            if (outcome.assignmentsListedOk) {
                 repo.upsertAssignments(
                     canvasCourse.id,
                     outcome.assignments.map {

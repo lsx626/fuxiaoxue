@@ -88,20 +88,25 @@ object OfficeExtractor {
                 job?.ensureActive()
                 onProgress(done, total)
             }
-            runParse {
-                val pages: List<DocPage> = when (ext) {
-                    "ppt", "pptx" -> SlideExtractor.extract(
-                        file, targetW, report, ::downscaleImage
-                    )
+            val prepared = PptxPreviewCopy.prepare(context, file)
+            try {
+                runParse {
+                    val pages: List<DocPage> = when (ext) {
+                        "ppt", "pptx" -> SlideExtractor.extract(
+                            prepared.file, targetW, report, ::downscaleImage
+                        )
                     // 与 PPT 路径同样传入降采样：照片多的 docx 会因页模型常驻
                     // 原始字节而 OOM（v1.0.9 只接了 Slide 路径，Word 漏了）
-                    "doc", "docx" -> PageRenderer.paginate(
-                        WordExtractor.extract(file, targetW, ::downscaleImage)
-                    )
-                    else -> SheetExtractor.extract(file, targetW)
+                        "doc", "docx" -> PageRenderer.paginate(
+                            WordExtractor.extract(file, targetW, ::downscaleImage)
+                        )
+                        else -> SheetExtractor.extract(file, targetW)
+                    }
+                    val scale = OfficeLimits.pageScale(pages.size)
+                    if (scale >= 1f) pages else pages.map { it.scaled(scale) }
                 }
-                val scale = OfficeLimits.pageScale(pages.size)
-                if (scale >= 1f) pages else pages.map { it.scaled(scale) }
+            } finally {
+                prepared.close()
             }
         }
     }
