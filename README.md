@@ -17,7 +17,7 @@
 
 ## 版本
 
-- Windows：**1.3.3**
+- Windows：**1.3.4**
 - Android：**1.3.3**（versionCode 23）
 
 详细变更见 [CHANGELOG](CHANGELOG.md)。

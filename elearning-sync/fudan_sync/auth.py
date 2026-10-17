@@ -11,7 +11,6 @@ import time
 from typing import Any, Dict, List, Optional
 
 import requests
-from Crypto.Cipher import AES
 
 CSRF_META_RE = re.compile(r'<meta\s+name="csrf-token"\s+content="([^"]+)"', re.IGNORECASE)
 COOKIE_KEY_SERVICE = "fudan-elearning-sync-cookie-key"
@@ -154,6 +153,8 @@ def _cookie_key() -> bytes:
 
 
 def _encrypt_cookie_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    from Crypto.Cipher import AES
+
     cipher = AES.new(_cookie_key(), AES.MODE_GCM)
     ciphertext, tag = cipher.encrypt_and_digest(
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -168,6 +169,8 @@ def _encrypt_cookie_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _decrypt_cookie_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    from Crypto.Cipher import AES
+
     cipher = AES.new(_cookie_key(), AES.MODE_GCM, nonce=base64.b64decode(payload["nonce"]))
     plaintext = cipher.decrypt_and_verify(
         base64.b64decode(payload["ciphertext"]), base64.b64decode(payload["tag"])

@@ -61,6 +61,7 @@ from .sharing import show_share_menu
 from .storage_manager import StorageManagerDialog
 from .styles import ACCENT, CARD, DANGER, SUCCESS, TEXT, TEXT_SECONDARY, WARNING
 from .tray import TrayController
+from .update_checker import UpdateWorker, has_update
 from .workers import SilentLoginWorker, SyncWorker
 
 
@@ -173,6 +174,12 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._refresh_stats()
         self._start_auto_timer()
+        self._update_worker: Optional[UpdateWorker] = None
+        self._update_timer = QTimer(self)
+        self._update_timer.setInterval(6 * 60 * 60 * 1000)
+        self._update_timer.timeout.connect(self._check_for_updates)
+        self._update_timer.start()
+        QTimer.singleShot(30000, self._check_for_updates)
 
         if self._has_stored_credentials():
             self._begin_silent_login()
@@ -261,11 +268,38 @@ class MainWindow(QMainWindow):
             ("打开同步目录", self._open_root_dir),
             ("存储管理", self._open_storage_manager),
             ("同步日志", self._toggle_log_panel),
+            ("检查更新", self._check_for_updates),
         ):
             menu.addAction(text, handler)
         more.setMenu(menu)
         header_layout.addWidget(more)
         return header
+
+    def _check_for_updates(self) -> None:
+        if self._update_worker is not None and self._update_worker.isRunning():
+            return
+        self._update_worker = UpdateWorker(self)
+        self._update_worker.result.connect(self._on_update_result)
+        self._update_worker.finished.connect(self._update_worker.deleteLater)
+        self._update_worker.start()
+
+    def _on_update_result(self, data: dict) -> None:
+        latest = data.get("tag") or ""
+        if not has_update(__version__, latest):
+            return
+        from PySide6.QtWidgets import QMessageBox
+
+        box = QMessageBox(self)
+        box.setWindowTitle("发现新版本")
+        box.setText(f"发现新版本 {latest}，当前版本为 v{__version__}。")
+        box.setInformativeText("是否打开 GitHub Release 页面查看更新？")
+        open_button = box.addButton("打开 Release", QMessageBox.AcceptRole)
+        box.addButton(QMessageBox.Close)
+        box.exec()
+        if box.clickedButton() is open_button:
+            import webbrowser
+
+            webbrowser.open(data.get("url") or "https://github.com/lsx626/fuxiaoxue/releases")
 
     def _build_stats_row(self) -> QWidget:
         row = QFrame()
@@ -1684,6 +1718,8 @@ class MainWindow(QMainWindow):
             worker = self.login_window.worker
             if worker is not None and worker.isRunning():
                 workers.append(worker)
+        if self._update_worker is not None and self._update_worker.isRunning():
+            workers.append(self._update_worker)
         return workers
 
     def _await_quit_workers(self, timeout_ms: int) -> bool:
