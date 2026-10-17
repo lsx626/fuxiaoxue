@@ -125,9 +125,9 @@
 
 **测试**：桌面 156 passed（新增 1 项结构化抽取竞态测试，PDF 降级测试随按需渲染语义更新）；Android JVM 109 passed + `lintDebug` 通过；真实对话框冒烟（文本/CSV/图片/docx + Ctrl+F 命中 + 图片双击复位）通过。
 
-### 当前工作区：资料库与可用性优化（2026-10-16，未发布）
+### v1.3.0：资料库与可用性优化（2026-10-17 发布）
 
-版本入口仍为桌面/Android **1.2.3**（Android versionCode 19），不是新的发布包。新增双端课程名称/代码与学期组合筛选，以及课程内文件状态筛选；Android 文件还可按名称/目录搜索、空结果一键清除条件。筛选只影响显示，不改同步范围、数据库状态和预览兄弟清单。
+版本入口为桌面/Android **1.3.0**（Android versionCode 20）。新增双端课程名称/代码与学期组合筛选，以及课程内文件状态筛选；Android 文件还可按名称/目录搜索、空结果一键清除条件。筛选只影响显示，不改同步范围、数据库状态和预览兄弟清单。
 
 桌面顶栏主操作收敛为搜索资料/截止日期/设置/更多；最近变更、同步目录、存储和日志收在更多菜单。增加可见的查看文件/继续阅读/预览按钮，表格支持键盘 Enter；长课程标题省略并保留 tooltip。同步刷新保留课程选择，关闭预览后刷新进度；修正全量同步确认说明（真实行为是重新下载已有文件）与 QSS 字体列表（原代码把 Python tuple 直接插入 CSS）。
 
@@ -139,7 +139,7 @@ Android 顶栏/正文使用主题色，截止日期随列表滚动；截止项�
 
 截图和设备测试日志分别留在已忽略的 `elearning-sync/.packaging-runtime/library-qa/` 与 `android-app/screenshots/library-qa-*`，仅含合成数据，不进仓库。本轮仅源码与 debug 验证，未提交/推送、未生成新正式安装器、未创建标签或 Release；现有 release 目录中的正式包不含上述改动。
 
-### 当前工作区续：Android 全面重构（2026-10-16～17，未发布）
+### v1.3.0 续：Android 全面重构（2026-10-16～17）
 
 在上一轮双端资料库优化之上，Android 已重做登录、课程库、课程文件、动态、存储、设置、搜索与阅读控制。`HomeScreen` 仅保留自适应导航壳，功能页独立；手机底部导航、720dp 起侧栏/课程网格，统一明暗主题。截止日期和变更移到「动态」，课程内同步使用独立底栏避免遮盖文件操作。筛选、搜索和滚动状态在预览返回时保留；密码不写 saved instance state。
 
@@ -151,7 +151,9 @@ Android 顶栏/正文使用主题色，截止日期随列表滚动；截止项�
 
 验证：Android **136 JVM passed**，`lintDebug`（0 错误、68 warning / 1 hint）、debug 应用与测试 APK 构建通过。首轮设备为 62 passed / 2 skipped；随后新增 `android-app/tools/generate_office_fixtures.py`，从空白合成文档经本机 Word/PowerPoint 生成旧格式夹具并推入专用模拟器，再补原生 PDF 续读/反复切换与超大 PPTX 轻量副本测试，完整重跑 **66 passed / 0 skipped**。夹具含表格/图片/富文本，未读取真实文档；无 Office/夹具的其他环境仍需如实记跳过。另验收 320×600dp / 字体 1.3 倍的主页面和 5 项阅读交互（6 项通过），1280×800dp 平板导航/页面截图通过。真实账号从空库同步 61 个文件（约 1.21 GB，另 11 个教师锁定）且逐个完成长度与预览核心检查；二次增量为 0 下载/0 失败/0 重复。真实验收发现并修复「课程级 401 误判会话失效」与「含超大内嵌视频 PPTX 预览 OOM」；账号、Cookie、课程资料和数据库不得进入 Git。长期后台与旧系统真机仍未覆盖。桌面完整 157 passed。
 
-详细故障、测试矩阵与限制见 [Android 重构验收记录](android-app/REFACTOR_AUDIT.md)。版本入口仍为双端 1.2.3 / Android versionCode 19，未提交、推送或发布。Office 复杂元素保真、旧系统真机/低内存、真实 UIS/学校网络及长期后台调度仍须发布前验收；不可宣称所有缺陷已经消除。
+详细故障、测试矩阵与限制见 [Android 重构验收记录](android-app/REFACTOR_AUDIT.md)。版本入口为双端 1.3.0 / Android versionCode 20。Office 复杂元素保真、旧系统真机/低内存及长期后台调度仍是已知限制；不可宣称所有缺陷已经消除。
+
+**v1.3.0 发布验收（2026-10-17）**：桌面 157 passed，PyInstaller 正式目录构建成功，隔离配置目录启动烟测 8 秒存活，Inno Setup 安装器 ProductVersion 为 1.3.0；Android 136 JVM passed、`lintDebug`、`assembleRelease`、`bundleRelease` 通过，APK 元数据为 versionCode 20 / versionName 1.3.0，APK 发布证书 SHA-256 指纹为 `1dc096a7647e931084dba2387487b6283f407c83b1feadb5b329cae70f1ef077`，AAB 经 jarsigner 验证。Windows 安装器仍无 Authenticode 签名。
 
 ## 2. 信息优先级
 
