@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
+import secrets
 import time
 from typing import Any, Dict, List, Optional
 
 import requests
+from Crypto.Cipher import AES
 
 CSRF_META_RE = re.compile(r'<meta\s+name="csrf-token"\s+content="([^"]+)"', re.IGNORECASE)
+COOKIE_KEY_SERVICE = "fudan-elearning-sync-cookie-key"
 
 
 class AuthError(RuntimeError):
@@ -67,6 +71,11 @@ class CookieAuth(BaseAuth):
             raise AuthError(f"Cookie 文件不存在: {self.cookie_file}（请先运行 login 或手动导出）")
         with open(self.cookie_file, "r", encoding="utf-8") as handle:
             raw = json.load(handle)
+        if isinstance(raw, dict) and raw.get("encrypted") is True:
+            try:
+                raw = _decrypt_cookie_payload(raw)
+            except Exception as exc:  # pylint: disable=broad-except
+                raise AuthError("Cookie 文件无法解密，请在原设备上重新登录") from exc
 
         cookies: List[Dict[str, Any]] = []
         if isinstance(raw, list):  # Playwright context.cookies() 格式
@@ -122,10 +131,51 @@ def save_cookies(
 ) -> None:
     """保存 cookie（Playwright 格式）到 JSON 文件，并限制文件权限。"""
     payload = {"csrf_token": csrf_token, "saved_at": int(time.time()), "cookies": cookies}
+    try:
+        payload = _encrypt_cookie_payload(payload)
+    except Exception:
+        # 无法使用系统钥匙串时保留兼容能力，同时仍收紧文件权限。
+        pass
     os.makedirs(os.path.dirname(os.path.abspath(cookie_file)), exist_ok=True)
     with open(cookie_file, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
     _restrict_file_permissions(cookie_file)
+
+
+def _cookie_key() -> bytes:
+    """从系统钥匙串取得本机 Cookie 加密密钥。"""
+    import keyring
+
+    encoded = keyring.get_password(COOKIE_KEY_SERVICE, "default")
+    if not encoded:
+        encoded = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii")
+        keyring.set_password(COOKIE_KEY_SERVICE, "default", encoded)
+    return base64.urlsafe_b64decode(encoded.encode("ascii"))
+
+
+def _encrypt_cookie_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    cipher = AES.new(_cookie_key(), AES.MODE_GCM)
+    ciphertext, tag = cipher.encrypt_and_digest(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
+    return {
+        "encrypted": True,
+        "algorithm": "AES-256-GCM",
+        "nonce": base64.b64encode(cipher.nonce).decode("ascii"),
+        "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+        "tag": base64.b64encode(tag).decode("ascii"),
+    }
+
+
+def _decrypt_cookie_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    cipher = AES.new(_cookie_key(), AES.MODE_GCM, nonce=base64.b64decode(payload["nonce"]))
+    plaintext = cipher.decrypt_and_verify(
+        base64.b64decode(payload["ciphertext"]), base64.b64decode(payload["tag"])
+    )
+    decoded = json.loads(plaintext.decode("utf-8"))
+    if not isinstance(decoded, dict):
+        raise ValueError("invalid cookie payload")
+    return decoded
 
 
 def _restrict_file_permissions(path: str) -> None:

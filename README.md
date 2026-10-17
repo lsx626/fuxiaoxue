@@ -17,8 +17,8 @@
 
 ## 版本
 
-- Windows：**1.3.2**
-- Android：**1.3.2**（versionCode 22）
+- Windows：**1.3.3**
+- Android：**1.3.3**（versionCode 23）
 
 详细变更见 [CHANGELOG](CHANGELOG.md)。
 
@@ -65,7 +65,7 @@ APK 输出于 `app/build/outputs/apk/release/app-release.apk`。
 
 ## 登录与版权
 
-软件支持 UIS 账号密码、API Token、浏览器登录和 Cookie 登录。账号密码仅用于登录，并由系统凭据存储保护；课程资料与同步状态保存在用户指定的本地目录。
+软件支持 UIS 账号密码、API Token、浏览器登录和 Cookie 登录。Windows 端的账号密码由系统凭据管理器保护，Cookie 文件使用系统钥匙串中的密钥进行 AES-GCM 加密；Android 端使用 Android Keystore 保护密码。课程资料与同步状态保存在用户指定的本地目录。
 
 软件只同步当前账号有权访问的课程内容。课程课件、作业附件及其中的文字、图片和其他文件，版权归对应授课教师、教学团队或出版方所有。请在获得授权的范围内使用、保存和分享，不得将资料用于未经许可的传播。
 
