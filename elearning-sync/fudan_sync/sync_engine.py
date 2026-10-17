@@ -323,6 +323,11 @@ class SyncEngine:
     # ------------------------------------------------------------------
     def sync_course(self, course: CourseInfo, full: bool = False) -> SyncStats:
         stats = SyncStats(mode="full" if full else "incremental")
+        course_state = next(
+            (item for item in self.state.list_courses() if int(item.get("id")) == course.id),
+            {},
+        )
+        automatic_download = bool(course_state.get("selected", 1))
         course_directory = self.course_local_dir(course)
         os.makedirs(course_directory, exist_ok=True)
 
@@ -379,7 +384,9 @@ class SyncEngine:
                 stats.files_locked += 1
                 self._log("info", "文件 [%s] 已被教师锁定，跳过下载", remote.filename)
                 continue
-            needs = full or state_needs_download
+            stored = self.state.get_file(remote.file_id) or {}
+            manually_selected = bool(stored.get("selected", 0))
+            needs = (full or state_needs_download) and (automatic_download or manually_selected)
             if needs:
                 tasks.append(
                     DownloadTask(

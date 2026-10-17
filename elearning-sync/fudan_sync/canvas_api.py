@@ -267,5 +267,12 @@ class CanvasAPI:
     def get_course(self, course_id: int) -> Dict[str, Any]:
         return self.get(f"/courses/{course_id}", params={"include[]": "term,syllabus_body"}) or {}
 
+    def get_assignment(self, course_id: int, assignment_id: int) -> Dict[str, Any]:
+        """读取作业详情、当前提交和教师评语。"""
+        return self.get(
+            f"/courses/{course_id}/assignments/{assignment_id}",
+            params={"include[]": "submission,submission_comments,submission_history,rubric"},
+        ) or {}
+
     def list_favorite_ids(self) -> List[int]:
         return [int(c["id"]) for c in self.list_courses(only_favorites=True) if c.get("id")]

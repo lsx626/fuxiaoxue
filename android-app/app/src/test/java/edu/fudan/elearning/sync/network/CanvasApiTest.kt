@@ -1,6 +1,9 @@
 package edu.fudan.elearning.sync.network
 
+import java.io.File
 import kotlinx.coroutines.runBlocking
+import okhttp3.RequestBody
+import okio.Buffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -26,10 +29,27 @@ class CanvasApiTest {
     /** 一次性假传输：按调用顺序返回预设响应，用完后重复最后一个。 */
     private class FakeTransport(private val replies: List<() -> HttpResponse>) : HttpTransport {
         val urls = mutableListOf<String>()
+        val bodies = mutableListOf<String>()
         var calls = 0
 
         override suspend fun get(url: String): HttpResponse {
             urls += url
+            val reply = replies[minOf(calls, replies.size - 1)]
+            calls += 1
+            return reply()
+        }
+
+        override suspend fun execute(
+            method: String,
+            url: String,
+            body: RequestBody?,
+        ): HttpResponse {
+            urls += url
+            body?.let {
+                val buffer = Buffer()
+                it.writeTo(buffer)
+                bodies += buffer.readUtf8()
+            }
             val reply = replies[minOf(calls, replies.size - 1)]
             calls += 1
             return reply()
@@ -272,11 +292,157 @@ class CanvasApiTest {
     fun currentUser_returnsNameAndToleratesWeirdBody() = runBlocking {
         val transport =
             FakeTransport(
-                listOf({ reply(200, """{"id":7,"name":"张三"}""") }, { reply(200, "not json") })
+                listOf(
+                    {
+                        reply(
+                            200,
+                            """{"id":7,"name":"张三","avatar_url":"https://elearning.fudan.edu.cn/avatar.png","sis_user_id":"123"}""",
+                        )
+                    },
+                    { reply(200, "not json") },
+                )
             )
         val api = api(transport, FakeTime())
-        assertEquals("张三", api.getCurrentUser())
+        assertEquals(
+            CanvasUser("张三", "https://elearning.fudan.edu.cn/avatar.png", "123"),
+            api.getCurrentUser(),
+        )
         assertEquals(null, api.getCurrentUser())
+    }
+
+    @Test
+    fun assignmentDetail_parsesSubmissionRubricAndAttempts() = runBlocking {
+        val transport =
+            FakeTransport(
+                listOf({
+                    reply(
+                        200,
+                        """
+                        {
+                          "id": 88,
+                          "name": "作业5",
+                          "description": "<p>完成系统</p>",
+                          "points_possible": 100,
+                          "allowed_attempts": 3,
+                          "submission_types": ["online_upload", "online_text_entry"],
+                          "submission": {
+                            "id": 9,
+                            "workflow_state": "graded",
+                            "submitted_at": "2026-10-17T10:00:00Z",
+                            "attempt": 1,
+                            "score": 95,
+                            "submission_comments": [
+                              {"id":1,"comment":"很好","author_name":"教师"}
+                            ],
+                            "attachments": [
+                              {"id":7,"display_name":"答案.pdf","filename":"answer.pdf","size":12}
+                            ]
+                          },
+                          "submission_history": [
+                            {
+                              "id": 8,
+                              "attempt": 0,
+                              "body": "第一次作答",
+                              "submission_comments": [
+                                {"id":2,"comment":"请补全推导","author_name":"教师"}
+                              ]
+                            }
+                          ],
+                          "rubric": [
+                            {
+                              "id":"c1",
+                              "description":"完整性",
+                              "points":50,
+                              "ratings":[{"id":"r1","description":"优秀","points":50}]
+                            }
+                          ]
+                        }
+                        """
+                            .trimIndent(),
+                    )
+                })
+            )
+        val assignment = api(transport, FakeTime()).getAssignment(42, 88)
+        assertEquals(3, assignment.allowedAttempts)
+        assertEquals(1, assignment.submission?.attempt)
+        assertEquals(95.0, assignment.submission?.score)
+        assertEquals("很好", assignment.submission?.comments?.first()?.comment)
+        assertEquals("第一次作答", assignment.submissionHistory.first().body)
+        assertEquals("请补全推导", assignment.submissionHistory.first().comments.first().comment)
+        assertEquals("答案.pdf", assignment.submission?.attachments?.first()?.displayName)
+        assertEquals("完整性", assignment.rubric.first().description)
+        assertEquals("优秀", assignment.rubric.first().ratings.first().description)
+    }
+
+    @Test
+    fun submitText_postsFormAndParsesSubmission() = runBlocking {
+        val transport =
+            FakeTransport(
+                listOf({
+                    reply(
+                        201,
+                        """{"id":11,"workflow_state":"submitted","attempt":2,"body":"我的答案"}""",
+                    )
+                })
+            )
+        val submission = api(transport, FakeTime()).submitText(42, 88, "我的答案")
+        assertEquals(11, submission.id)
+        assertEquals("submitted", submission.workflowState)
+        assertEquals(2, submission.attempt)
+        assertEquals(
+            "https://host/api/v1/courses/42/assignments/88/submissions",
+            transport.urls.single(),
+        )
+        assertTrue(
+            transport.bodies.single().contains("submission%5Bsubmission_type%5D=online_text_entry")
+        )
+        assertTrue(transport.bodies.single().contains("%E6%88%91%E7%9A%84%E7%AD%94%E6%A1%88"))
+    }
+
+    @Test
+    fun submitFiles_uploadsThenSubmitsReturnedFileId() = runBlocking {
+        val file = File.createTempFile("submission", ".txt").apply { writeText("答案") }
+        try {
+            val transport =
+                FakeTransport(
+                    listOf(
+                        {
+                            reply(
+                                200,
+                                """
+                                {
+                                  "upload_url":"https://upload.example/files",
+                                  "upload_params":{"key":"abc","policy":"xyz"}
+                                }
+                                """
+                                    .trimIndent(),
+                            )
+                        },
+                        { reply(201, """{"id":321,"display_name":"submission.txt"}""") },
+                        {
+                            reply(
+                                201,
+                                """{"id":12,"workflow_state":"submitted","submission_type":"online_upload"}""",
+                            )
+                        },
+                    )
+                )
+            val submission = api(transport, FakeTime()).submitFiles(42, 88, listOf(file))
+            assertEquals(12, submission.id)
+            assertEquals(3, transport.urls.size)
+            assertEquals(
+                "https://host/api/v1/courses/42/assignments/88/submissions/self/files",
+                transport.urls[0],
+            )
+            assertEquals("https://upload.example/files", transport.urls[1])
+            assertEquals(
+                "https://host/api/v1/courses/42/assignments/88/submissions",
+                transport.urls[2],
+            )
+            assertTrue(transport.bodies[2].contains("submission%5Bfile_ids%5D%5B%5D=321"))
+        } finally {
+            file.delete()
+        }
     }
 
     @Test

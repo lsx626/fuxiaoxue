@@ -2,6 +2,7 @@ package edu.fudan.elearning.sync.network
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.RequestBody
 
 /**
  * 一次已读完全文的 HTTP 响应。
@@ -24,6 +25,10 @@ data class HttpResponse(val code: Int, val headers: Map<String, String>, val bod
  */
 interface HttpTransport {
     suspend fun get(url: String): HttpResponse
+
+    /** GET 之外的请求只由原生任务提交使用；旧测试桩可以继续只实现 [get]。 */
+    suspend fun execute(method: String, url: String, body: RequestBody?): HttpResponse =
+        throw UnsupportedOperationException("$method is not supported by this transport")
 }
 
 /** 基于 OkHttp 的传输实现，复用带会话 Cookie 的 [ApiClient] 客户端。 */
@@ -31,6 +36,25 @@ class OkHttpTransport : HttpTransport {
     override suspend fun get(url: String): HttpResponse =
         withContext(Dispatchers.IO) {
             ApiClient.getCall(url).readCancellable { response, checkActive ->
+                checkActive()
+                val headers =
+                    response.headers.names().associateWith { name -> response.header(name) ?: "" }
+                HttpResponse(
+                    code = response.code,
+                    headers = headers,
+                    body = response.body?.string() ?: "",
+                )
+            }
+        }
+
+    override suspend fun execute(method: String, url: String, body: RequestBody?): HttpResponse =
+        withContext(Dispatchers.IO) {
+            val request =
+                okhttp3.Request.Builder()
+                    .url(url)
+                    .method(method, if (method == "GET") null else body)
+                    .build()
+            ApiClient.client.newCall(request).readCancellable { response, checkActive ->
                 checkActive()
                 val headers =
                     response.headers.names().associateWith { name -> response.header(name) ?: "" }

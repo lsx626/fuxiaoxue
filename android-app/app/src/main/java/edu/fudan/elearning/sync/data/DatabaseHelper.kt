@@ -27,7 +27,8 @@ class DatabaseHelper(context: Context) :
                 name TEXT NOT NULL,
                 code TEXT DEFAULT '',
                 term TEXT DEFAULT '',
-                last_synced_at TEXT
+                last_synced_at TEXT,
+                selected INTEGER DEFAULT 0
             )"""
         )
         db.execSQL(
@@ -44,6 +45,7 @@ class DatabaseHelper(context: Context) :
                 url TEXT DEFAULT '',
                 updated_at TEXT DEFAULT '',
                 error TEXT DEFAULT '',
+                selected INTEGER DEFAULT 0,
                 FOREIGN KEY(course_id) REFERENCES courses(id) ON DELETE CASCADE
             )"""
         )
@@ -88,6 +90,8 @@ class DatabaseHelper(context: Context) :
                 )
             }
         }
+        if (oldVersion < 7) addColumnIfMissing(db, "files", "selected", "INTEGER DEFAULT 0")
+        if (oldVersion < 8) addColumnIfMissing(db, "courses", "selected", "INTEGER DEFAULT 0")
     }
 
     override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -206,6 +210,6 @@ class DatabaseHelper(context: Context) :
          * files_fts（搜索）、assignments（截止日期）、sync_changes（变更摘要）， 全部为**新增表**，老数据不动； v4 新增
          * reading_progress（阅读进度），同样是纯加表； v5 补 files.error（v1.2.2 已读写此列，但此前建库与迁移均遗漏）。
          */
-        const val SCHEMA_VERSION = 6
+        const val SCHEMA_VERSION = 8
     }
 }

@@ -74,7 +74,7 @@ assert window.width() == 880
 assert window.sync_button.visibleRegion().boundingRect() == window.sync_button.rect()
 window.course_filter_edit.setText("chem101")
 for row in range(2):
-    assert window.course_table.isRowHidden(row) == (window.course_table.item(row, 6).text() != "2")
+    assert window.course_table.isRowHidden(row) == (window.course_table.item(row, 7).text() != "2")
 window.term_filter.setCurrentIndex(window.term_filter.findData("2025秋"))
 assert all(window.course_table.isRowHidden(i) for i in range(2))
 assert window.course_empty_label.isVisible()

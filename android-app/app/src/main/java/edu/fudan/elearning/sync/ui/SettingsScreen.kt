@@ -3,6 +3,9 @@ package edu.fudan.elearning.sync.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -14,6 +17,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import edu.fudan.elearning.sync.BuildConfig
 import edu.fudan.elearning.sync.R
 
@@ -22,15 +26,19 @@ internal fun SettingsScreen(viewModel: AppViewModel) {
     val settings by viewModel.settings.collectAsState()
     val login by viewModel.loginState.collectAsState()
     val offline by viewModel.needsReauth.collectAsState()
+    val profileName by viewModel.profileName.collectAsState()
+    val avatarUrl by viewModel.profileAvatarUrl.collectAsState()
+    val accountId = (login as? LoginState.LoggedIn)?.username.orEmpty()
     val version by viewModel.dataVersion.collectAsState()
     val lastSummary by loadResource("sync-summary", version) { viewModel.lastSyncSummary() }
     var showTheme by rememberSaveable { mutableStateOf(false) }
     var showInterval by rememberSaveable { mutableStateOf(false) }
+    var showGuide by rememberSaveable { mutableStateOf(false) }
     var confirmLogout by rememberSaveable { mutableStateOf(false) }
     LazyColumn(
         Modifier.fillMaxSize().testTag("settings-list"),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item {
             ScreenHeading(
@@ -40,29 +48,44 @@ internal fun SettingsScreen(viewModel: AppViewModel) {
         }
         item { SectionLabel(stringResource(R.string.settings_account)) }
         item {
-            Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface) {
-                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0f)) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         Surface(
-                            shape = MaterialTheme.shapes.medium,
+                            shape = CircleShape,
                             color = MaterialTheme.colorScheme.secondaryContainer,
                         ) {
-                            Icon(
-                                Icons.Default.Person,
-                                null,
-                                Modifier.padding(14.dp).size(24.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
+                            if (avatarUrl.isNotBlank())
+                                AsyncImage(
+                                    model = avatarUrl,
+                                    contentDescription =
+                                        stringResource(R.string.settings_profile_photo),
+                                    modifier = Modifier.size(52.dp),
+                                )
+                            else
+                                Icon(
+                                    Icons.Default.Person,
+                                    null,
+                                    Modifier.padding(14.dp).size(24.dp),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
                         }
                         Column(Modifier.weight(1f)) {
                             Text(
-                                (login as? LoginState.LoggedIn)?.username.orEmpty(),
+                                profileName.ifBlank {
+                                    (login as? LoginState.LoggedIn)?.username.orEmpty()
+                                },
                                 style = MaterialTheme.typography.titleMedium,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                accountId,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             Text(
                                 stringResource(
@@ -91,10 +114,10 @@ internal fun SettingsScreen(viewModel: AppViewModel) {
         }
         item { SectionLabel(stringResource(R.string.settings_sync)) }
         item {
-            Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface) {
+            Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0f)) {
                 Column {
                     Row(
-                        Modifier.padding(18.dp),
+                        Modifier.padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
@@ -124,7 +147,7 @@ internal fun SettingsScreen(viewModel: AppViewModel) {
                     }
                     HorizontalDivider(
                         color = MaterialTheme.colorScheme.outlineVariant,
-                        modifier = Modifier.padding(horizontal = 18.dp),
+                        modifier = Modifier.padding(horizontal = 14.dp),
                     )
                     SettingsRow(
                         stringResource(R.string.settings_interval),
@@ -153,7 +176,7 @@ internal fun SettingsScreen(viewModel: AppViewModel) {
         }
         item { SectionLabel(stringResource(R.string.settings_appearance)) }
         item {
-            Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface) {
+            Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0f)) {
                 SettingsRow(
                     stringResource(R.string.settings_theme),
                     stringResource(themeLabel(settings.theme)),
@@ -164,8 +187,8 @@ internal fun SettingsScreen(viewModel: AppViewModel) {
         }
         item { SectionLabel(stringResource(R.string.settings_location)) }
         item {
-            Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface) {
-                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0f)) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
                         viewModel.downloadRoot,
                         style = MaterialTheme.typography.bodySmall,
@@ -179,13 +202,60 @@ internal fun SettingsScreen(viewModel: AppViewModel) {
                 }
             }
         }
+        item { SectionLabel(stringResource(R.string.settings_help)) }
+        item {
+            Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0f)) {
+                SettingsRow(
+                    stringResource(R.string.settings_user_guide),
+                    stringResource(R.string.settings_user_guide_hint),
+                    modifier = Modifier.testTag("settings-user-guide"),
+                ) {
+                    showGuide = true
+                }
+            }
+        }
         item { SectionLabel(stringResource(R.string.settings_about)) }
         item {
-            Text(
-                stringResource(R.string.settings_version, BuildConfig.VERSION_NAME),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0f)) {
+                Column(
+                    Modifier.fillMaxWidth().padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        stringResource(R.string.app_name),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    Text(
+                        stringResource(R.string.settings_version, BuildConfig.VERSION_NAME),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        stringResource(R.string.about_description),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        stringResource(R.string.about_features),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        stringResource(R.string.about_privacy),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        stringResource(R.string.about_copyright),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        stringResource(R.string.about_license),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
     if (showTheme)
@@ -211,6 +281,7 @@ internal fun SettingsScreen(viewModel: AppViewModel) {
             },
             { showInterval = false },
         )
+    if (showGuide) UserGuideSheet { showGuide = false }
     if (confirmLogout)
         ConfirmActionDialog(
             stringResource(R.string.logout_title),
@@ -232,9 +303,14 @@ internal fun themeLabel(mode: ThemeMode): Int =
     }
 
 @Composable
-private fun SettingsRow(title: String, value: String, onClick: () -> Unit) {
+private fun SettingsRow(
+    title: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(18.dp),
+        modifier.fillMaxWidth().clickable(onClick = onClick).padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
@@ -247,6 +323,45 @@ private fun SettingsRow(title: String, value: String, onClick: () -> Unit) {
             )
         }
         Icon(Icons.Default.ArrowDropDown, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun UserGuideSheet(onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(
+                stringResource(R.string.guide_title),
+                style = MaterialTheme.typography.headlineSmall,
+            )
+            GuideSection(R.string.guide_login_title, R.string.guide_login_body)
+            GuideSection(R.string.guide_sync_scope_title, R.string.guide_sync_scope_body)
+            GuideSection(R.string.guide_sync_title, R.string.guide_sync_body)
+            GuideSection(R.string.guide_read_title, R.string.guide_read_body)
+            GuideSection(R.string.guide_task_title, R.string.guide_task_body)
+            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                Text(stringResource(R.string.action_close))
+            }
+        }
+    }
+}
+
+@Composable
+private fun GuideSection(title: Int, body: Int) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(stringResource(title), style = MaterialTheme.typography.titleSmall)
+        Text(
+            stringResource(body),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

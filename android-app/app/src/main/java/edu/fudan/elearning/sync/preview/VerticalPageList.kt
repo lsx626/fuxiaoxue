@@ -3,7 +3,6 @@ package edu.fudan.elearning.sync.preview
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
@@ -24,7 +23,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -51,7 +49,6 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -65,7 +62,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import edu.fudan.elearning.sync.R
@@ -114,10 +110,9 @@ fun VerticalPageList(
     val zoomOutLabel = stringResource(R.string.preview_zoom_out)
     val zoomInLabel = stringResource(R.string.preview_zoom_in)
 
-    // 列表级缩放状态：页号 -> 倍率 / 平移。手势与按钮都写这两张表，
-    // 列表保留各自的缩放（历史缺陷：滚到下一页缩放丢失，只能重新捏）。
-    val zoomScales = remember { mutableStateMapOf<Int, Float>() }
-    val zoomOffsets = remember { mutableStateMapOf<Int, Offset>() }
+    // 倍率和平移必须作为一个整体写入；拆成两张表会让重组短暂读到
+    // 「新倍率 + 旧平移」，松手时就会出现一帧错位。
+    val transforms = remember { mutableStateMapOf<Int, PageTransform>() }
 
     // 当前主显示页（可见度最高的页条目）：± 缩放按钮作用于它
     val currentPage by remember {
@@ -160,8 +155,8 @@ fun VerticalPageList(
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(0.dp),
+            contentPadding = PaddingValues(0.dp),
         ) {
             if (header != null) {
                 item { header() }
@@ -169,14 +164,11 @@ fun VerticalPageList(
             items((0 until pageCount).toList(), key = { it }) { page ->
                 PageRow(
                     pageIndex = page,
-                    totalPages = pageCount,
                     aspect = aspectOf(page),
                     cache = cache,
                     renderPage = renderPage,
                     maxZoom = maxZoom,
-                    zoomScales = zoomScales,
-                    zoomOffsets = zoomOffsets,
-                    onPageIndicatorClick = { showJumpDialog = true },
+                    transforms = transforms,
                 )
             }
         }
@@ -206,12 +198,7 @@ fun VerticalPageList(
                     ) {
                         Text(stringResource(R.string.preview_top))
                     }
-                    TextButton(
-                        onClick = {
-                            zoomScales.clear()
-                            zoomOffsets.clear()
-                        }
-                    ) {
+                    TextButton(onClick = { transforms.clear() }) {
                         Text(stringResource(R.string.preview_fit))
                     }
                 }
@@ -223,24 +210,20 @@ fun VerticalPageList(
                     // Accessible, stable touch targets on narrow screens.
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         IconButton(
-                            enabled = (zoomScales[currentPage] ?: 1f) > 1f,
-                            onClick = {
-                                zoomStep(currentPage, -0.25f, zoomScales, zoomOffsets, maxZoom)
-                            },
+                            enabled = (transforms[currentPage]?.scale ?: 1f) > 1f,
+                            onClick = { zoomStep(currentPage, -0.25f, transforms, maxZoom) },
                             modifier = Modifier.semantics { contentDescription = zoomOutLabel },
                         ) {
                             Text("−", fontWeight = FontWeight.Bold)
                         }
                         Text(
-                            "${((zoomScales[currentPage] ?: 1f) * 100).toInt()}%",
+                            "${(((transforms[currentPage]?.scale ?: 1f)) * 100).toInt()}%",
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Medium,
                         )
                         IconButton(
-                            enabled = (zoomScales[currentPage] ?: 1f) < maxZoom,
-                            onClick = {
-                                zoomStep(currentPage, 0.25f, zoomScales, zoomOffsets, maxZoom)
-                            },
+                            enabled = (transforms[currentPage]?.scale ?: 1f) < maxZoom,
+                            onClick = { zoomStep(currentPage, 0.25f, transforms, maxZoom) },
                             modifier = Modifier.semantics { contentDescription = zoomInLabel },
                         ) {
                             Text("+", fontWeight = FontWeight.Bold)
@@ -315,35 +298,36 @@ fun VerticalPageList(
     }
 }
 
+private data class PageTransform(val scale: Float = 1f, val offset: Offset = Offset.Zero)
+
 /** 缩放按钮的步进：保持锚点在页面中心，回 1x 时清平移。 */
 private fun zoomStep(
     page: Int,
     delta: Float,
-    scales: androidx.compose.runtime.snapshots.SnapshotStateMap<Int, Float>,
-    offsets: androidx.compose.runtime.snapshots.SnapshotStateMap<Int, Offset>,
+    transforms: androidx.compose.runtime.snapshots.SnapshotStateMap<Int, PageTransform>,
     maxZoom: Float,
 ) {
-    val current = scales[page] ?: 1f
-    val next = (current + delta).coerceIn(1f, maxZoom)
-    scales[page] = next
-    if (next <= 1f) offsets.remove(page)
-    else
-        offsets[page] =
-            (offsets[page] ?: Offset.Zero) *
-                ((next - 1f) / (current - 1f).coerceAtLeast(0.001f)).coerceAtMost(1f)
+    val current = transforms[page] ?: PageTransform()
+    val next = (current.scale + delta).coerceIn(1f, maxZoom)
+    transforms[page] =
+        if (next <= 1f) PageTransform()
+        else
+            current.copy(
+                scale = next,
+                offset =
+                    current.offset *
+                        ((next - 1f) / (current.scale - 1f).coerceAtLeast(0.001f)).coerceAtMost(1f),
+            )
 }
 
 @Composable
 private fun PageRow(
     pageIndex: Int,
-    totalPages: Int,
     aspect: Float,
     cache: PageBitmapCache,
     renderPage: suspend (Int) -> Bitmap?,
     maxZoom: Float,
-    zoomScales: androidx.compose.runtime.snapshots.SnapshotStateMap<Int, Float>,
-    zoomOffsets: androidx.compose.runtime.snapshots.SnapshotStateMap<Int, Offset>,
-    onPageIndicatorClick: () -> Unit,
+    transforms: androidx.compose.runtime.snapshots.SnapshotStateMap<Int, PageTransform>,
 ) {
     var bitmap by remember(pageIndex) { mutableStateOf<Bitmap?>(cache[pageIndex]) }
     var failed by remember(pageIndex) { mutableStateOf(false) }
@@ -369,84 +353,82 @@ private fun PageRow(
         onDispose { cache.unpin(pageIndex) }
     }
 
-    val scale = zoomScales[pageIndex] ?: 1f
-    val offset = zoomOffsets[pageIndex] ?: Offset.Zero
+    val transform = transforms[pageIndex] ?: PageTransform()
+    val scale = transform.scale
+    val offset = transform.offset
     var boxSize by remember(pageIndex) { mutableStateOf(IntSize.Zero) }
 
-    Column {
-        Box(
-            Modifier.fillMaxWidth()
-                .aspectRatio(aspect.coerceAtLeast(0.1f))
-                .clip(RoundedCornerShape(6.dp))
-                .background(Color.White)
-                .onSizeChanged { boxSize = it }
-                .pinchZoom(
-                    scaleProvider = { scale },
-                    offsetProvider = { offset },
-                    sizeProvider = { boxSize },
-                    maxZoom = maxZoom,
-                    onScale = { zoomScales[pageIndex] = it },
-                    onOffset = {
-                        val maxX = boxSize.width * (scale - 1f).coerceAtLeast(0f) / 2
-                        val maxY = boxSize.height * (scale - 1f).coerceAtLeast(0f) / 2
-                        zoomOffsets[pageIndex] =
-                            Offset(it.x.coerceIn(-maxX, maxX), it.y.coerceIn(-maxY, maxY))
-                    },
-                    onDoubleTap = { tap ->
-                        // 以点击点为锚点缩放：放大后手指下仍是原来的内容
-                        val center = boxSize.let { Offset(it.width / 2f, it.height / 2f) }
-                        if (scale > 1f) {
-                            zoomScales[pageIndex] = 1f
-                            zoomOffsets.remove(pageIndex)
-                        } else {
-                            zoomScales[pageIndex] = 2f
-                            // 推导：graphicsLayer(s, T) 把内容点 p 显示在 c + s(p-c) + T；
-                            // 要求点击点 t 处的内容仍在 t，得 T = (t - c)(1 - s)
-                            zoomOffsets[pageIndex] = (tap - center) * (1f - 2f)
-                        }
-                    },
-                ),
-            contentAlignment = Alignment.Center,
-        ) {
-            val bmp = bitmap
-            when {
-                bmp != null ->
-                    Image(
-                        bitmap = bmp.asImageBitmap(),
-                        contentDescription = "第 ${pageIndex + 1} 页",
-                        contentScale = ContentScale.FillWidth,
-                        modifier =
-                            Modifier.fillMaxWidth()
-                                .graphicsLayer(
-                                    scaleX = scale,
-                                    scaleY = scale,
-                                    translationX = offset.x,
-                                    translationY = offset.y,
-                                ),
-                    )
-                failed ->
-                    TextButton(
-                        onClick = {
-                            failed = false
-                            retry++
-                        }
-                    ) {
-                        Text(stringResource(R.string.preview_page_retry), color = Color(0xFF4F46E5))
+    Box(
+        Modifier.fillMaxWidth()
+            .aspectRatio(aspect.coerceAtLeast(0.1f))
+            .background(Color.White)
+            .onSizeChanged { boxSize = it }
+            .pinchZoom(
+                transformProvider = { transforms[pageIndex] ?: PageTransform() },
+                sizeProvider = { boxSize },
+                maxZoom = maxZoom,
+                onTransform = { nextScale, value ->
+                    val maxX = boxSize.width * (nextScale - 1f).coerceAtLeast(0f) / 2
+                    val maxY = boxSize.height * (nextScale - 1f).coerceAtLeast(0f) / 2
+                    transforms[pageIndex] =
+                        PageTransform(
+                            scale = nextScale,
+                            offset =
+                                Offset(value.x.coerceIn(-maxX, maxX), value.y.coerceIn(-maxY, maxY)),
+                        )
+                },
+                onDoubleTap = { tap ->
+                    // 以点击点为锚点缩放：放大后手指下仍是原来的内容
+                    val center = boxSize.let { Offset(it.width / 2f, it.height / 2f) }
+                    if (scale > 1f) {
+                        transforms[pageIndex] = PageTransform()
+                    } else {
+                        // 推导：graphicsLayer(s, T) 把内容点 p 显示在 c + s(p-c) + T；
+                        // 要求点击点 t 处的内容仍在 t，得 T = (t - c)(1 - s)
+                        val nextOffset = (tap - center) * (1f - 2f)
+                        val maxX = boxSize.width / 2f
+                        val maxY = boxSize.height / 2f
+                        transforms[pageIndex] =
+                            PageTransform(
+                                scale = 2f,
+                                offset =
+                                    Offset(
+                                        nextOffset.x.coerceIn(-maxX, maxX),
+                                        nextOffset.y.coerceIn(-maxY, maxY),
+                                    ),
+                            )
                     }
-                else -> CircularProgressIndicator(modifier = Modifier.padding(24.dp))
-            }
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        val bmp = bitmap
+        when {
+            bmp != null ->
+                Image(
+                    bitmap = bmp.asImageBitmap(),
+                    contentDescription = "第 ${pageIndex + 1} 页",
+                    contentScale = ContentScale.FillWidth,
+                    modifier =
+                        Modifier.fillMaxWidth()
+                            .graphicsLayer(
+                                scaleX = scale,
+                                scaleY = scale,
+                                translationX = offset.x,
+                                translationY = offset.y,
+                            ),
+                )
+            failed ->
+                TextButton(
+                    onClick = {
+                        failed = false
+                        retry++
+                    }
+                ) {
+                    Text(stringResource(R.string.preview_page_retry), color = Color(0xFF4F46E5))
+                }
+            else -> CircularProgressIndicator(modifier = Modifier.padding(24.dp))
         }
-        Text(
-            stringResource(R.string.preview_page_indicator, pageIndex + 1, totalPages),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier =
-                Modifier.align(Alignment.CenterHorizontally)
-                    .clickable(onClick = onPageIndicatorClick)
-                    .padding(4.dp),
-        )
     }
 }
 
@@ -456,60 +438,83 @@ private fun PageRow(
  * - 单指且已缩放（>1x）：平移；
  * - 单指且未缩放：不消费事件，交给 LazyColumn 滚动。 双击以**点击点**为锚点在 1x / 2x 间切换（[onDoubleTap] 收到的是组件内坐标）。
  */
+@Composable
 private fun Modifier.pinchZoom(
-    scaleProvider: () -> Float,
-    offsetProvider: () -> Offset,
+    transformProvider: () -> PageTransform,
     sizeProvider: () -> IntSize,
     maxZoom: Float,
-    onScale: (Float) -> Unit,
-    onOffset: (Offset) -> Unit,
+    onTransform: (Float, Offset) -> Unit,
     onDoubleTap: (Offset) -> Unit,
-): Modifier =
-    this.pointerInput(Unit) { detectTapGestures(onDoubleTap = { tap -> onDoubleTap(tap) }) }
+): Modifier {
+    val latestTransformProvider = rememberUpdatedState(transformProvider)
+    val latestSizeProvider = rememberUpdatedState(sizeProvider)
+    val latestOnTransform = rememberUpdatedState(onTransform)
+    val latestOnDoubleTap = rememberUpdatedState(onDoubleTap)
+    return this.pointerInput(Unit) {
+            detectTapGestures(onDoubleTap = { tap -> latestOnDoubleTap.value(tap) })
+        }
         .pointerInput(Unit) {
             awaitEachGesture {
                 awaitFirstDown(requireUnconsumed = false)
-                var startScale = 0f
-                var startOffset = Offset.Zero
+                var startTransform = PageTransform()
+                var started = false
                 var startCentroid = Offset.Zero
                 var accZoom = 1f
+                var pinchSeen = false
                 do {
                     val event = awaitPointerEvent()
                     val changes = event.changes
-                    if (changes.size >= 2) {
+                    val allPressed = changes.all { it.pressed }
+                    if (changes.size >= 2 && allPressed) {
+                        pinchSeen = true
                         changes.forEach { it.consume() }
                         val centroid = event.calculateCentroid(useCurrent = true)
-                        if (startScale == 0f) {
-                            startScale = scaleProvider()
-                            startOffset = offsetProvider()
+                        if (!started) {
+                            started = true
+                            startTransform = latestTransformProvider.value()
                             startCentroid = centroid
                         } else {
                             accZoom *= event.calculateZoom()
-                            val newScale = (startScale * accZoom).coerceIn(1f, maxZoom)
-                            onScale(newScale)
+                            val newScale = (startTransform.scale * accZoom).coerceIn(1f, maxZoom)
                             if (newScale <= 1f) {
-                                onOffset(Offset.Zero)
+                                latestOnTransform.value(1f, Offset.Zero)
                             } else {
                                 // graphicsLayer 以组件中心为原点缩放；让手势开始时双指中心
                                 // 对准的内容点始终落在当前双指中心，实现以手指为中心缩放。
                                 val center =
-                                    sizeProvider().let { Offset(it.width / 2f, it.height / 2f) }
-                                val ratio = newScale / startScale
-                                onOffset(
+                                    latestSizeProvider.value().let {
+                                        Offset(it.width / 2f, it.height / 2f)
+                                    }
+                                val ratio = newScale / startTransform.scale
+                                latestOnTransform.value(
+                                    newScale,
                                     centroid -
                                         center -
-                                        (startCentroid - center - startOffset) * ratio
+                                        (startCentroid - center - startTransform.offset) * ratio,
                                 )
                             }
                         }
                     } else if (changes.size == 1) {
                         val change = changes.first()
-                        if (scaleProvider() > 1f) {
+                        val current = latestTransformProvider.value()
+                        if (!change.pressed || pinchSeen) {
+                            // 双指缩放结束后，先抬起的那根手指会让剩余手指产生一次
+                            // 很大的 positionChange；把它当平移会表现为松手瞬间跳一下。
+                            // 抬手事件本身也只消费、不再写缩放状态。
                             change.consume()
-                            onOffset(offsetProvider() + change.positionChange())
+                        } else if (current.scale > 1f) {
+                            change.consume()
+                            latestOnTransform.value(
+                                current.scale,
+                                current.offset + change.positionChange(),
+                            )
                         }
                         // 未缩放时不消费，LazyColumn 正常滚动
+                    } else if (changes.size >= 2) {
+                        // 其中一根手指已经抬起：保留上一帧的变换，不再计算 zoom/centroid。
+                        changes.forEach { it.consume() }
                     }
                 } while (changes.any { it.pressed })
             }
         }
+}

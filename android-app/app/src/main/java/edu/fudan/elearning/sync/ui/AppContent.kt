@@ -24,6 +24,7 @@ fun AppContent(viewModel: AppViewModel, requestNotifications: () -> Unit = {}) {
         val context = LocalContext.current
         val login by viewModel.loginState.collectAsState()
         val preview by viewModel.previewTarget.collectAsState()
+        val task by viewModel.taskAssignment.collectAsState()
         val search by viewModel.searchOpen.collectAsState()
         val courses by viewModel.courses.collectAsState()
         val saved = rememberSaveableStateHolder()
@@ -78,6 +79,7 @@ fun AppContent(viewModel: AppViewModel, requestNotifications: () -> Unit = {}) {
                             )
                         },
                     )
+                task != null -> AssignmentDetailScreen(viewModel)
                 search -> saved.SaveableStateProvider("search") { SearchScreen(viewModel) }
                 login is LoginState.LoggedIn ->
                     saved.SaveableStateProvider("library") { HomeScreen(viewModel, snackbars) }

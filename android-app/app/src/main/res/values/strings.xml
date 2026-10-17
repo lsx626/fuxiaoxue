@@ -19,11 +19,10 @@
     <string name="action_retry">重试</string>
     <string name="menu_more">更多操作</string>
     <string name="menu_sync_now">立即同步</string>
-    <string name="menu_sync_full">全量同步（重新下载全部文件）</string>
     <string name="menu_refresh">刷新列表</string>
     <string name="file_retry_hint">可点「重试」重新下载，或稍后同步自动重试</string>
     <string name="file_pending">待下载</string>
-    <string name="library_course_search">查找课程名称或代码</string>
+    <string name="library_course_search">查找课程、代码或文件名</string>
     <string name="library_file_search">查找文件名或目录</string>
     <string name="library_all_terms">全部学期</string>
     <string name="library_all_files">全部文件</string>
@@ -37,6 +36,14 @@
     <string name="library_course_count">显示 %1$d / %2$d 门课程</string>
     <string name="library_file_count">显示 %1$d / %2$d 个文件</string>
     <string name="library_load_error">文件列表加载失败，请重试</string>
+    <string name="course_sync_all_summary">自动下载</string>
+    <string name="course_sync_files_summary">手动选择 · %1$d 个</string>
+    <string name="course_sync_not_configured">尚未选择</string>
+    <string name="course_sync_range_entry">设置下载方式</string>
+    <string name="course_sync_all_title">整门课程</string>
+    <string name="course_sync_all_hint">自动下载现有资料和以后新增的资料</string>
+    <string name="course_sync_files_title">挑选文件</string>
+    <string name="course_sync_files_hint">仅下载下方勾选的文件（已选 %1$d 个）</string>
     <string name="html_limitation_note">应用内富文本渲染：不执行脚本，不加载远程图片；链接点击后由浏览器打开。</string>
     <string name="html_truncated">文件较大（%1$s），仅渲染前 %2$s 内容</string>
     <string name="upcoming_deadlines_title">最近截止</string>

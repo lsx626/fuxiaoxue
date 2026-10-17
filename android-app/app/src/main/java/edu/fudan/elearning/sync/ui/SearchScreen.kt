@@ -1,6 +1,5 @@
 package edu.fudan.elearning.sync.ui
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
@@ -65,8 +64,8 @@ fun SearchScreen(viewModel: AppViewModel) {
             LazyColumn(
                 state = list,
                 modifier = Modifier.fillMaxSize().testTag("search-results"),
-                contentPadding = PaddingValues(top = 16.dp, bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = PaddingValues(top = 10.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 when {
                     searching -> item { LoadingState(stringResource(R.string.search_loading)) }
@@ -99,15 +98,10 @@ fun SearchScreen(viewModel: AppViewModel) {
                         }
                 }
                 items(results, key = { it.fileId }) { hit ->
-                    Surface(
-                        Modifier.fillMaxWidth().clickable { viewModel.openSearchResult(hit) },
-                        shape = MaterialTheme.shapes.medium,
-                        color = MaterialTheme.colorScheme.surface,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                    ) {
+                    Column(Modifier.fillMaxWidth().clickable { viewModel.openSearchResult(hit) }) {
                         Column(
-                            Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            Modifier.padding(horizontal = 4.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
                             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 DocumentBadge(hit.filename.ifBlank { hit.name })
@@ -139,6 +133,10 @@ fun SearchScreen(viewModel: AppViewModel) {
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                         }
+                        HorizontalDivider(
+                            Modifier.padding(start = 60.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant,
+                        )
                     }
                 }
             }

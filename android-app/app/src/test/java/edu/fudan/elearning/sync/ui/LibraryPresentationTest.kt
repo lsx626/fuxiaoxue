@@ -26,6 +26,10 @@ class LibraryPresentationTest {
             )
         assertEquals(listOf(1L), filterLibraryCourses(courses, " chem ", "秋").map { it.course.id })
         assertEquals(emptyList<CourseStats>(), filterLibraryCourses(courses, "chem", "春"))
+        assertEquals(
+            listOf(2L),
+            filterLibraryCourses(courses, "lecture", null, setOf(2L)).map { it.course.id },
+        )
     }
 
     @Test

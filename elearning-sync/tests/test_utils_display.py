@@ -31,6 +31,12 @@ class TestCleanCourseName:
     def test_multiple_codes(self):
         assert clean_course_name("复变函数 MATH120011.01 MATH120011.02") == "复变函数"
 
+    def test_three_digit_section_code(self):
+        assert (
+            clean_course_name("GEIP10004.158 新时代实践教育Ⅰ")
+            == "新时代实践教育Ⅰ"
+        )
+
     def test_empty(self):
         assert clean_course_name("") == ""
 

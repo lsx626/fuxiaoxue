@@ -30,7 +30,6 @@ fun HomeScreen(viewModel: AppViewModel, sharedSnackbars: SnackbarHostState? = nu
     var tab by rememberSaveable { mutableStateOf(LibraryTab.COURSES) }
     var menu by remember { mutableStateOf(false) }
     var showSync by rememberSaveable { mutableStateOf(false) }
-    var confirmFull by rememberSaveable { mutableStateOf(false) }
     val localSnackbars = remember { SnackbarHostState() }
     val snackbars = sharedSnackbars ?: localSnackbars
     if (sharedSnackbars == null)
@@ -92,6 +91,25 @@ fun HomeScreen(viewModel: AppViewModel, sharedSnackbars: SnackbarHostState? = nu
                             }
                     },
                     actions = {
+                        if (tab == LibraryTab.COURSES || course != null)
+                            IconButton(
+                                onClick = {
+                                    if (syncing || busy) showSync = true else viewModel.sync()
+                                },
+                                enabled = !busy,
+                                modifier = Modifier.testTag("sync-icon"),
+                            ) {
+                                if (syncing)
+                                    CircularProgressIndicator(
+                                        Modifier.size(20.dp),
+                                        strokeWidth = 2.dp,
+                                    )
+                                else
+                                    Icon(
+                                        Icons.Default.Refresh,
+                                        stringResource(R.string.action_sync_selected),
+                                    )
+                            }
                         IconButton(onClick = viewModel::openSearch) {
                             Icon(Icons.Default.Search, stringResource(R.string.search_open))
                         }
@@ -114,14 +132,6 @@ fun HomeScreen(viewModel: AppViewModel, sharedSnackbars: SnackbarHostState? = nu
                                         showSync = true
                                     },
                                 )
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.menu_sync_full)) },
-                                    enabled = !busy,
-                                    onClick = {
-                                        menu = false
-                                        confirmFull = true
-                                    },
-                                )
                             }
                         }
                     },
@@ -133,34 +143,7 @@ fun HomeScreen(viewModel: AppViewModel, sharedSnackbars: SnackbarHostState? = nu
                 )
             },
             bottomBar = {
-                if (course != null)
-                    Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 2.dp) {
-                        Button(
-                            onClick = {
-                                if (syncing || busy) showSync = true else viewModel.sync()
-                            },
-                            modifier =
-                                Modifier.fillMaxWidth()
-                                    .navigationBarsPadding()
-                                    .padding(horizontal = 20.dp, vertical = 8.dp),
-                        ) {
-                            if (syncing)
-                                CircularProgressIndicator(
-                                    Modifier.size(18.dp),
-                                    strokeWidth = 2.dp,
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                )
-                            else Icon(Icons.Default.Refresh, null, Modifier.size(20.dp))
-                            Spacer(Modifier.width(10.dp))
-                            Text(
-                                stringResource(
-                                    if (syncing) R.string.sync_running
-                                    else if (busy) R.string.sync_detail else R.string.action_sync
-                                )
-                            )
-                        }
-                    }
-                else if (!wide)
+                if (course == null && !wide)
                     NavigationBar(
                         containerColor = MaterialTheme.colorScheme.surface,
                         tonalElevation = 3.dp,
@@ -177,27 +160,6 @@ fun HomeScreen(viewModel: AppViewModel, sharedSnackbars: SnackbarHostState? = nu
                     }
             },
             snackbarHost = { if (sharedSnackbars == null) SnackbarHost(snackbars) },
-            floatingActionButton = {
-                if (course == null && tab == LibraryTab.COURSES)
-                    ExtendedFloatingActionButton(
-                        onClick = { if (syncing || busy) showSync = true else viewModel.sync() },
-                        icon = {
-                            if (syncing)
-                                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                            else Icon(Icons.Default.Refresh, null)
-                        },
-                        text = {
-                            Text(
-                                stringResource(
-                                    if (syncing) R.string.sync_running else R.string.action_sync
-                                )
-                            )
-                        },
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary,
-                        elevation = FloatingActionButtonDefaults.elevation(2.dp),
-                    )
-            },
         ) { padding ->
             Row(Modifier.fillMaxSize().padding(padding)) {
                 if (wide)
@@ -266,27 +228,7 @@ fun HomeScreen(viewModel: AppViewModel, sharedSnackbars: SnackbarHostState? = nu
             }
         }
     }
-    if (showSync)
-        SyncTaskSheet(
-            viewModel,
-            onDismiss = { showSync = false },
-            onFullSync = {
-                showSync = false
-                confirmFull = true
-            },
-        )
-    if (confirmFull)
-        ConfirmActionDialog(
-            stringResource(R.string.sync_full_title),
-            stringResource(R.string.sync_full_hint),
-            stringResource(R.string.sync_full_action),
-            onConfirm = {
-                confirmFull = false
-                viewModel.sync(full = true)
-            },
-            onDismiss = { confirmFull = false },
-            destructive = false,
-        )
+    if (showSync) SyncTaskSheet(viewModel, onDismiss = { showSync = false })
 }
 
 @Composable

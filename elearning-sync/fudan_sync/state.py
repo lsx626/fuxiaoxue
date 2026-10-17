@@ -44,6 +44,7 @@ class StateStore:
                 term TEXT,
                 enrollment_type TEXT,
                 is_favorite INTEGER DEFAULT 0,
+                selected INTEGER DEFAULT 1,
                 first_seen_at TEXT,
                 last_synced_at TEXT
             );
@@ -69,6 +70,7 @@ class StateStore:
                 last_seen_at TEXT,
                 downloaded_at TEXT,
                 last_error TEXT,
+                selected INTEGER DEFAULT 0,
                 extra TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_files_course ON files(course_id);
@@ -123,6 +125,8 @@ class StateStore:
                 is_media INTEGER DEFAULT 0,
                 updated_at TEXT DEFAULT ''
             );            """)
+            self._ensure_column(cursor, "courses", "selected", "INTEGER DEFAULT 1")
+            self._ensure_column(cursor, "files", "selected", "INTEGER DEFAULT 0")
         # FTS5 is optional; failure leaves the rest of the schema usable.
         self._fts_available = True
         try:
@@ -182,16 +186,36 @@ class StateStore:
         cursor = self.conn.execute("SELECT * FROM courses ORDER BY name")
         return [dict(r) for r in cursor.fetchall()]
 
+    @staticmethod
+    def _ensure_column(cursor: sqlite3.Cursor, table: str, column: str, definition: str) -> None:
+        columns = {row[1] for row in cursor.execute(f"PRAGMA table_info({table})")}
+        if column not in columns:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def course_ids_matching_file_name(self, query: str) -> set[int]:
+        text = str(query or "").strip()
+        if not text:
+            return set()
+        escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
+        rows = self.conn.execute(
+            """SELECT DISTINCT course_id FROM files
+               WHERE status != 'remote_missing'
+                 AND (filename LIKE ? ESCAPE '\\' OR display_name LIKE ? ESCAPE '\\')""",
+            (pattern, pattern),
+        ).fetchall()
+        return {int(row[0]) for row in rows}
+
     def course_progress(self) -> List[Dict[str, Any]]:
         """课程维度汇总（界面表格用）：文件数 / 已下载数 / 本地容量 / 最近同步。"""
         cursor = self.conn.execute(
-            """SELECT c.id, c.name, c.code, c.term, c.last_synced_at,
+            """SELECT c.id, c.name, c.code, c.term, c.last_synced_at, c.selected,
                       COUNT(f.file_id) AS files_total,
                       SUM(CASE WHEN f.status='downloaded' THEN 1 ELSE 0 END) AS files_done,
                       SUM(CASE WHEN f.status='downloaded' THEN COALESCE(f.size, 0)
                                ELSE 0 END) AS bytes_downloaded
                FROM courses c LEFT JOIN files f ON f.course_id = c.id
-               GROUP BY c.id, c.name, c.code, c.term, c.last_synced_at
+               GROUP BY c.id, c.name, c.code, c.term, c.last_synced_at, c.selected
                ORDER BY c.name"""
         )
         return [dict(r) for r in cursor.fetchall()]
@@ -238,10 +262,10 @@ class StateStore:
                                       content_type, folder_id, folder_path, created_at,
                                       updated_at, modified_at, locked_for_user, hidden,
                                       source, context, local_path, status, last_seen_at,
-                                      last_error, extra)
+                                      last_error, selected, extra)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                            COALESCE((SELECT status FROM files WHERE file_id=?), 'pending'),
-                           ?, NULL,
+                           ?, NULL, COALESCE((SELECT selected FROM files WHERE file_id=?), 0),
                            COALESCE((SELECT extra FROM files WHERE file_id=?), ?))
                    ON CONFLICT(file_id) DO UPDATE SET
                        course_id=excluded.course_id, filename=excluded.filename,
@@ -271,6 +295,7 @@ class StateStore:
                     remote.get("local_path"),
                     remote["file_id"],
                     now_utc(),
+                    remote["file_id"],
                     remote["file_id"],
                     remote.get("extra"),
                 ),
@@ -369,6 +394,29 @@ class StateStore:
             "SELECT * FROM files WHERE course_id=? ORDER BY folder_path, filename", (course_id,)
         )
         return [dict(r) for r in cursor.fetchall()]
+
+    def set_course_selected(self, course_id: int, selected: bool) -> None:
+        with self._write_lock_cursor() as cursor:
+            cursor.execute(
+                "UPDATE courses SET selected=? WHERE id=?", (int(bool(selected)), course_id)
+            )
+            if selected:
+                cursor.execute(
+                    "UPDATE files SET selected=0 WHERE course_id=?", (course_id,)
+                )
+
+    def set_file_selected(self, file_id: int, selected: bool) -> None:
+        with self._write_lock_cursor() as cursor:
+            cursor.execute(
+                "UPDATE files SET selected=? WHERE file_id=?", (int(bool(selected)), file_id)
+            )
+
+    def set_course_files_selected(self, course_id: int, selected: bool) -> None:
+        with self._write_lock_cursor() as cursor:
+            cursor.execute(
+                "UPDATE files SET selected=? WHERE course_id=? AND status IN ('pending','failed')",
+                (int(bool(selected)), course_id),
+            )
 
     def file_id_by_path(self, local_path: str) -> Optional[Dict[str, Any]]:
         """按本地路径反查文件记录（预览入口只知道路径，翻页与进度需要 file_id）。"""
@@ -480,16 +528,18 @@ class StateStore:
                     ),
                 )
 
-    def list_assignments(self, limit: int = 200) -> List[Dict[str, Any]]:
-        """按截止时间升序列出作业（供待办视图；只列有截止时间的）。"""
-        cursor = self.conn.execute(
-            """SELECT a.id, a.course_id, a.name, a.due_at, a.html_url,
-                      c.name AS course_name
-               FROM assignments a LEFT JOIN courses c ON c.id = a.course_id
-               WHERE a.due_at != ''
-               ORDER BY a.due_at ASC LIMIT ?""",
-            (limit,),
-        )
+    def list_assignments(self, limit: Optional[int] = 200) -> List[Dict[str, Any]]:
+        """按截止时间升序列出作业；limit=None 时返回全部。"""
+        sql = """SELECT a.id, a.course_id, a.name, a.due_at, a.html_url,
+                         c.name AS course_name
+                  FROM assignments a LEFT JOIN courses c ON c.id = a.course_id
+                  WHERE a.due_at != ''
+                  ORDER BY a.due_at ASC"""
+        params = ()
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (limit,)
+        cursor = self.conn.execute(sql, params)
         return [dict(r) for r in cursor.fetchall()]
 
     def record_file_change(

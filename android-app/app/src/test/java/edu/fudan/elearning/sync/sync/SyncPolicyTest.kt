@@ -114,4 +114,12 @@ class SyncPolicyTest {
         // Canvas 自己的课程封面图仍然跳过（非用户内容）
         assertTrue(SyncPolicy.shouldSkip("course_image.png"))
     }
+
+    @Test
+    fun syncScopeFollowsCourseAndFileSelection() {
+        assertTrue(SyncPolicy.fileInSyncScope(true, emptySet(), 99))
+        assertTrue(SyncPolicy.fileInSyncScope(false, setOf(7, 99), 99))
+        assertFalse(SyncPolicy.fileInSyncScope(false, setOf(7), 99))
+        assertFalse(SyncPolicy.fileInSyncScope(false, emptySet(), 99))
+    }
 }

@@ -153,6 +153,33 @@ class RefactorIntegrityTest {
     }
 
     @Test
+    fun courseAndFileSelectionsUseSeparateFlags() {
+        repo.upsertFile(FileItem(11, 1, "待下载文件", "new.pdf", status = "pending"))
+        repo.upsertFile(FileItem(12, 1, "失败文件", "retry.pdf", status = "failed"))
+        repo.setFileSelected(11, true)
+        assertEquals(setOf(11L), repo.selectedFiles().map { it.fileId }.toSet())
+        assertFalse(repo.courseStats().single().course.selected)
+
+        repo.setCourseFilesSelected(1, true)
+        assertEquals(setOf(11L, 12L), repo.selectedFiles().map { it.fileId }.toSet())
+        repo.setCourseFilesSelected(1, false)
+        assertTrue(repo.selectedFiles().isEmpty())
+
+        // 重选「挑选文件」不应消掉用户已挑好的文件。
+        repo.setFileSelected(11, true)
+        repo.setCourseSelected(1, false)
+        assertEquals(setOf(11L), repo.selectedFiles().map { it.fileId }.toSet())
+
+        repo.setCourseSelected(1, true)
+        assertTrue(repo.courseStats().single().course.selected)
+        assertTrue(repo.selectedFiles().isEmpty())
+
+        repo.setCourseSelected(1, false)
+        assertFalse(repo.courseStats().single().course.selected)
+        assertTrue(repo.selectedFiles().isEmpty())
+    }
+
+    @Test
     fun storageRejectsOutsidePathWithoutDeletingFile() {
         val outside = File(context.cacheDir, "synthetic-outside.txt").apply { writeText("keep") }
         try {

@@ -12,6 +12,14 @@ class Prefs(context: Context) {
         get() = sp.getString("username", "") ?: ""
         set(value) = sp.edit().putString("username", value).apply()
 
+    var profileName: String
+        get() = sp.getString("profile_name", "") ?: ""
+        set(value) = sp.edit().putString("profile_name", value).apply()
+
+    var profileAvatarUrl: String
+        get() = sp.getString("profile_avatar_url", "") ?: ""
+        set(value) = sp.edit().putString("profile_avatar_url", value).apply()
+
     var syncIntervalMinutes: Int
         get() = sp.getInt("sync_interval_minutes", 15)
         set(value) = sp.edit().putInt("sync_interval_minutes", value).apply()

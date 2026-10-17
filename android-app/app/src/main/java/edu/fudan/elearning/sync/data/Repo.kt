@@ -35,13 +35,16 @@ class Repo(context: Context) : java.io.Closeable {
         val list = mutableListOf<CourseStats>()
         db.readableDatabase
             .rawQuery(
-                """SELECT c.id, c.name, c.code, c.term, c.last_synced_at,
+                """SELECT c.id, c.name, c.code, c.term, c.last_synced_at, c.selected,
                       COUNT(f.file_id) AS total,
                       SUM(CASE WHEN f.status='downloaded' THEN 1 ELSE 0 END) AS done,
-                      SUM(CASE WHEN f.status='downloaded' THEN COALESCE(f.size,0) ELSE 0 END) AS bytes
+                      SUM(CASE WHEN f.status='downloaded' THEN COALESCE(f.size,0) ELSE 0 END) AS bytes,
+                      SUM(CASE WHEN COALESCE(f.selected,0)=1
+                               AND f.status IN ('pending','failed') THEN 1 ELSE 0 END) AS selected,
+                      SUM(CASE WHEN f.status IN ('pending','failed') THEN 1 ELSE 0 END) AS selectable
                FROM courses c LEFT JOIN files f
                     ON f.course_id = c.id AND f.status != 'remote_missing'
-               GROUP BY c.id, c.name, c.code, c.term, c.last_synced_at
+               GROUP BY c.id, c.name, c.code, c.term, c.last_synced_at, c.selected
                ORDER BY c.name""",
                 null,
             )
@@ -54,13 +57,16 @@ class Repo(context: Context) : java.io.Closeable {
                             code = c.getString(2),
                             term = c.getString(3),
                             lastSyncedAt = c.getString(4),
+                            selected = c.getInt(5) == 1,
                         )
                     list.add(
                         CourseStats(
                             course = course,
-                            filesTotal = c.getInt(5),
-                            filesDone = c.getInt(6),
-                            bytesDownloaded = c.getLong(7),
+                            filesTotal = c.getInt(6),
+                            filesDone = c.getInt(7),
+                            bytesDownloaded = c.getLong(8),
+                            filesSelected = c.getInt(9),
+                            filesSelectable = c.getInt(10),
                         )
                     )
                 }
@@ -96,6 +102,7 @@ class Repo(context: Context) : java.io.Closeable {
                 put("url", file.url)
                 put("updated_at", file.updatedAt)
                 put("error", file.error)
+                put("selected", if (file.selected) 1 else 0)
             }
         db.writableDatabase.insertWithOnConflict(
             "files",
@@ -130,10 +137,87 @@ class Repo(context: Context) : java.io.Closeable {
             it.toFile()
         }
 
+    /** 为课程主页的统一搜索找出文件名命中的课程，包含尚未下载的已发现资料。 */
+    fun courseIdsMatchingFileName(query: String): Set<Long> {
+        val escaped = query.trim().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        if (escaped.isEmpty()) return emptySet()
+        val pattern = "%$escaped%"
+        return query(
+                """SELECT DISTINCT course_id FROM files
+               WHERE status != 'remote_missing'
+                 AND (name LIKE ? ESCAPE '\\' OR filename LIKE ? ESCAPE '\\')""",
+                arrayOf(pattern, pattern),
+            ) {
+                it.getLong(0)
+            }
+            .toSet()
+    }
+
     fun getAllDownloadedFiles(): List<FileItem> =
         query("SELECT * FROM files WHERE status='downloaded' ORDER BY downloaded_at DESC") {
             it.toFile()
         }
+
+    fun setFileSelected(fileId: Long, selected: Boolean) {
+        val values = ContentValues().apply { put("selected", if (selected) 1 else 0) }
+        db.writableDatabase.update("files", values, "file_id=?", arrayOf(fileId.toString()))
+    }
+
+    /** 手动下载模式下，批量选择或清空本课程仍可下载的文件。 */
+    fun setCourseFilesSelected(courseId: Long, selected: Boolean) {
+        val values = ContentValues().apply { put("selected", if (selected) 1 else 0) }
+        db.writableDatabase.update(
+            "files",
+            values,
+            "course_id=? AND status IN ('pending','failed')",
+            arrayOf(courseId.toString()),
+        )
+    }
+
+    /** 勾选整门课程时清除单文件勾选，避免两种选择状态叠加。 */
+    fun setCourseSelected(courseId: Long, selected: Boolean) {
+        val database = db.writableDatabase
+        database.beginTransaction()
+        try {
+            database.update(
+                "courses",
+                ContentValues().apply { put("selected", if (selected) 1 else 0) },
+                "id=?",
+                arrayOf(courseId.toString()),
+            )
+            // 选择整门课时，整课规则覆盖单文件选择；切回「挑选文件」时不要清空
+            // 已有勾选，避免用户只是再次点到该选项就丢失选择结果。
+            if (selected)
+                database.update(
+                    "files",
+                    ContentValues().apply { put("selected", 0) },
+                    "course_id=?",
+                    arrayOf(courseId.toString()),
+                )
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
+    }
+
+    fun selectedCourseIds(): Set<Long> =
+        query("SELECT id FROM courses WHERE selected=1") { it.getLong(0) }.toSet()
+
+    fun selectedFiles(): List<FileItem> =
+        query(
+            "SELECT * FROM files WHERE selected=1 AND status IN ('pending','failed') " +
+                "ORDER BY course_id, folder_path, filename"
+        ) {
+            it.toFile()
+        }
+
+    fun selectedFileCount(): Int =
+        db.readableDatabase
+            .rawQuery(
+                "SELECT COUNT(*) FROM files WHERE selected=1 AND status IN ('pending','failed')",
+                null,
+            )
+            .use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else 0 }
 
     fun deleteFile(fileId: Long) {
         val dbw = db.writableDatabase
@@ -674,6 +758,8 @@ private fun Cursor.toCourse(): Course =
         code = getString(getColumnIndexOrThrow("code")),
         term = getString(getColumnIndexOrThrow("term")),
         lastSyncedAt = getString(getColumnIndexOrThrow("last_synced_at")),
+        selected =
+            runCatching { getInt(getColumnIndexOrThrow("selected")) == 1 }.getOrDefault(false),
     )
 
 private fun Cursor.toFile(): FileItem =
@@ -691,4 +777,6 @@ private fun Cursor.toFile(): FileItem =
         updatedAt =
             runCatching { getString(getColumnIndexOrThrow("updated_at")) }.getOrDefault("") ?: "",
         error = runCatching { getString(getColumnIndexOrThrow("error")) }.getOrDefault("") ?: "",
+        selected =
+            runCatching { getInt(getColumnIndexOrThrow("selected")) == 1 }.getOrDefault(false),
     )

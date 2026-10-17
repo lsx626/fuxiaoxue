@@ -148,8 +148,9 @@ object FileUtils {
      */
     fun cleanCourseName(raw: String): String {
         if (raw.isEmpty()) return raw
-        // 复旦选课代码形如 DATA130012.01 / CHEM10003.03（主编号 5~6 位）
-        val code = "[A-Z]{2,6}\\d{5,6}(?:\\.\\d{1,2})?"
+        // 复旦选课代码形如 DATA130012.01 / CHEM10003.03 / GEIP10004.158。
+        // 课序号不一定是两位；只吃到两位时会把最后的数字留在课程名开头。
+        val code = "[A-Z]{2,6}\\d{5,6}(?:\\.\\d{1,4})?"
         // 1)「（CODE）」式：整对括号一起去
         var name = Regex("[（(]\\s*$code\\s*[）)]").replace(raw, " ")
         // 2) 裸代码：连同两侧空白一起吞掉

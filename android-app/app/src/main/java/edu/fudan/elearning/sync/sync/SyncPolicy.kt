@@ -12,6 +12,13 @@ import java.util.Locale
  */
 object SyncPolicy {
 
+    /** 勾选整门课程时包含该课全部文件；否则只包含显式勾选的文件。 */
+    fun fileInSyncScope(
+        courseSelected: Boolean,
+        selectedFileIds: Set<Long>,
+        fileId: Long,
+    ): Boolean = courseSelected || fileId in selectedFileIds
+
     /** 是否需要下载该文件。 */
     fun shouldDownload(
         full: Boolean,

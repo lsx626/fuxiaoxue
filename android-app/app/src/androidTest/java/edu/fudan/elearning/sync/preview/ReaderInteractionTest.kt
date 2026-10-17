@@ -150,6 +150,43 @@ class ReaderInteractionTest {
     }
 
     @Test
+    fun pinchGestureZoomsWithoutResettingOnRelease() {
+        compose.setContent {
+            FuXiaoXueTheme {
+                VerticalPageList(
+                    1,
+                    { 0.7f },
+                    {
+                        Bitmap.createBitmap(280, 400, Bitmap.Config.ARGB_8888).apply {
+                            eraseColor(android.graphics.Color.WHITE)
+                        }
+                    },
+                )
+            }
+        }
+        compose.waitForIdle()
+        compose.onRoot().performTouchInput {
+            pinch(
+                start0 = center - androidx.compose.ui.geometry.Offset(80f, 0f),
+                end0 = center - androidx.compose.ui.geometry.Offset(260f, 0f),
+                start1 = center + androidx.compose.ui.geometry.Offset(80f, 0f),
+                end1 = center + androidx.compose.ui.geometry.Offset(260f, 0f),
+                durationMillis = 700,
+            )
+        }
+        compose.waitForIdle()
+        val zoomTexts =
+            compose.onAllNodes(hasText("%", substring = true)).fetchSemanticsNodes().mapNotNull {
+                runCatching {
+                        it.config[androidx.compose.ui.semantics.SemanticsProperties.Text]
+                            .joinToString("") { text -> text.text }
+                    }
+                    .getOrNull()
+            }
+        assertTrue("双指手势后应保持放大状态，实际 $zoomTexts", zoomTexts.any { it != "100%" })
+    }
+
+    @Test
     fun textFindCanNavigateToLaterLazyChunk() {
         val file =
             File(context.cacheDir, "synthetic-find.txt").apply {

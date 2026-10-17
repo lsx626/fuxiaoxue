@@ -4,10 +4,16 @@ import com.google.gson.Gson
 import com.google.gson.JsonElement
 import com.google.gson.JsonParser
 import com.google.gson.annotations.SerializedName
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import okhttp3.FormBody
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.MultipartBody
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
 
 /** Canvas 课程（含学期）。 */
 data class CanvasCourse(
@@ -20,6 +26,12 @@ data class CanvasCourse(
 
 /** Canvas 学期。 */
 data class CanvasTerm(val id: Long, val name: String = "")
+
+data class CanvasUser(
+    val name: String = "",
+    @SerializedName("avatar_url") val avatarUrl: String = "",
+    @SerializedName("sis_user_id") val sisUserId: String = "",
+)
 
 /** Canvas 文件。 */
 data class CanvasFile(
@@ -147,7 +159,192 @@ class CanvasApi(
                 }
             if (assignment == null || assignment.id <= 0 || assignment.name.isNullOrBlank())
                 throw ApiException.Parse("作业数据不完整，已保留之前的截止日期")
-            assignment.copy(attachments = assignment.attachments.orEmpty())
+            assignment.copy(
+                attachments = assignment.attachments.orEmpty(),
+                submissionTypes = assignment.submissionTypes.orEmpty(),
+            )
+        }
+
+    /** 单个作业的完整正文、分值、提交方式与附件（应用内任务详情）。 */
+    suspend fun getAssignment(courseId: Long, assignmentId: Long): CanvasAssignment {
+        val body =
+            request(
+                    url(
+                        "/api/v1/courses/$courseId/assignments/$assignmentId" +
+                            "?include[]=submission&include[]=submission_comments" +
+                            "&include[]=submission_history&include[]=rubric"
+                    )
+                )
+                .body
+        val assignment =
+            try {
+                gson.fromJson(body, CanvasAssignment::class.java)
+            } catch (error: Exception) {
+                throw ApiException.Parse("任务数据格式异常", error)
+            }
+        if (assignment == null || assignment.id != assignmentId || assignment.name.isNullOrBlank())
+            throw ApiException.Parse("任务数据不完整，请刷新文件列表后重试")
+        return assignment.copy(
+            attachments = assignment.attachments.orEmpty(),
+            submissionTypes = assignment.submissionTypes.orEmpty(),
+            rubric =
+                assignment.rubric.orEmpty().map { criterion ->
+                    criterion.copy(ratings = criterion.ratings.orEmpty())
+                },
+            submission =
+                assignment.submission?.copy(
+                    attachments = assignment.submission.attachments.orEmpty(),
+                    comments = assignment.submission.comments.orEmpty(),
+                ),
+            submissionHistory =
+                assignment.submissionHistory.orEmpty().map { history ->
+                    history.copy(
+                        attachments = history.attachments.orEmpty(),
+                        comments = history.comments.orEmpty(),
+                    )
+                },
+        )
+    }
+
+    /** 提交文字作业。 */
+    suspend fun submitText(courseId: Long, assignmentId: Long, text: String): CanvasSubmission {
+        val body =
+            request(
+                    url(submissionsPath(courseId, assignmentId)),
+                    method = "POST",
+                    body =
+                        FormBody.Builder()
+                            .add("submission[submission_type]", "online_text_entry")
+                            .add("submission[body]", text)
+                            .build(),
+                )
+                .body
+        return parseSubmission(body)
+    }
+
+    /** 提交网址型作业。 */
+    suspend fun submitUrl(courseId: Long, assignmentId: Long, url: String): CanvasSubmission {
+        val body =
+            request(
+                    url(submissionsPath(courseId, assignmentId)),
+                    method = "POST",
+                    body =
+                        FormBody.Builder()
+                            .add("submission[submission_type]", "online_url")
+                            .add("submission[url]", url)
+                            .build(),
+                )
+                .body
+        return parseSubmission(body)
+    }
+
+    /**
+     * 上传文件并作为作业提交。
+     *
+     * 使用 Canvas 官方的三步上传：申请上传参数 -> 向 `upload_url` 发送 multipart -> 用返回的 file_id 提交作业。
+     */
+    suspend fun submitFiles(
+        courseId: Long,
+        assignmentId: Long,
+        files: List<File>,
+    ): CanvasSubmission {
+        require(files.isNotEmpty()) { "请先选择要提交的文件" }
+        val uploadedIds = files.map { file -> uploadSubmissionFile(courseId, assignmentId, file) }
+        val form =
+            FormBody.Builder()
+                .add("submission[submission_type]", "online_upload")
+                .apply { uploadedIds.forEach { add("submission[file_ids][]", it.toString()) } }
+                .build()
+        val body =
+            request(url(submissionsPath(courseId, assignmentId)), method = "POST", body = form).body
+        return parseSubmission(body)
+    }
+
+    private suspend fun uploadSubmissionFile(courseId: Long, assignmentId: Long, file: File): Long {
+        val mime = guessMime(file.name)
+        val requestBody =
+            request(
+                    url(
+                        "/api/v1/courses/$courseId/assignments/$assignmentId/submissions/self/files"
+                    ),
+                    method = "POST",
+                    body =
+                        FormBody.Builder()
+                            .add("name", file.name)
+                            .add("size", file.length().toString())
+                            .add("content_type", mime)
+                            .add("on_duplicate", "overwrite")
+                            .build(),
+                )
+                .body
+        val slot =
+            runCatching { JsonParser.parseString(requestBody).asJsonObject }.getOrNull()
+                ?: throw ApiException.Parse("文件上传参数格式异常")
+        slot
+            .get("id")
+            ?.takeIf { !it.isJsonNull }
+            ?.asLong
+            ?.let {
+                return it
+            }
+        val uploadUrl =
+            slot.get("upload_url")?.takeIf { !it.isJsonNull }?.asString
+                ?: throw ApiException.Parse("文件上传地址缺失")
+        val uploadParams = slot.getAsJsonObject("upload_params")
+        val upload =
+            runCatching {
+                    MultipartBody.Builder()
+                        .setType(MultipartBody.FORM)
+                        .apply {
+                            uploadParams?.entrySet()?.forEach { (key, value) ->
+                                if (!value.isJsonNull) addFormDataPart(key, value.asString)
+                            }
+                            addFormDataPart(
+                                "file",
+                                file.name,
+                                file.asRequestBody(mime.toMediaTypeOrNull()),
+                            )
+                        }
+                        .build()
+                }
+                .getOrElse { throw ApiException.Parse("无法构造文件上传", it) }
+        val uploadedBody = request(uploadUrl, method = "POST", body = upload, throttle = false).body
+        val uploaded =
+            runCatching { JsonParser.parseString(uploadedBody).asJsonObject.get("id")?.asLong }
+                .getOrNull()
+        return uploaded ?: throw ApiException.Parse("文件已上传，但服务端未返回文件编号")
+    }
+
+    private fun parseSubmission(body: String): CanvasSubmission {
+        val submission =
+            runCatching {
+                    gson.fromJson(JsonParser.parseString(body), CanvasSubmission::class.java)
+                }
+                .getOrNull() ?: throw ApiException.Parse("提交结果格式异常")
+        return submission.copy(
+            attachments = submission.attachments.orEmpty(),
+            comments = submission.comments.orEmpty(),
+        )
+    }
+
+    private fun submissionsPath(courseId: Long, assignmentId: Long) =
+        "/api/v1/courses/$courseId/assignments/$assignmentId/submissions"
+
+    private fun guessMime(name: String): String =
+        when (name.substringAfterLast('.', "").lowercase()) {
+            "pdf" -> "application/pdf"
+            "doc" -> "application/msword"
+            "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            "ppt" -> "application/vnd.ms-powerpoint"
+            "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            "xls" -> "application/vnd.ms-excel"
+            "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            "zip" -> "application/zip"
+            "txt" -> "text/plain"
+            "jpg",
+            "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            else -> "application/octet-stream"
         }
 
     /**
@@ -202,15 +399,17 @@ class CanvasApi(
         )
     }
 
-    /** 当前用户显示名；解析不出来返回 null（不算失败）。 */
-    suspend fun getCurrentUser(): String? {
+    /** 当前用户资料；解析不出来返回 null（不算失败）。 */
+    suspend fun getCurrentUser(): CanvasUser? {
         val body = request(url(SELF_PATH)).body
         return runCatching {
-                JsonParser.parseString(body)
-                    .asJsonObject
-                    .get("name")
-                    ?.takeIf { !it.isJsonNull }
-                    ?.asString
+                gson.fromJson(JsonParser.parseString(body), CanvasUser::class.java)?.let { user ->
+                    user.copy(
+                        name = user.name.orEmpty(),
+                        avatarUrl = user.avatarUrl.orEmpty(),
+                        sisUserId = user.sisUserId.orEmpty(),
+                    )
+                }
             }
             .getOrNull()
     }
@@ -244,15 +443,21 @@ class CanvasApi(
      *
      * 重试期间一直持有 [gate]，即元数据请求严格串行；[sleeper] 可注入， 使单测能在毫秒内验证退避数值。
      */
-    private suspend fun request(urlString: String): HttpResponse =
+    private suspend fun request(
+        urlString: String,
+        method: String = "GET",
+        body: RequestBody? = null,
+        throttle: Boolean = true,
+    ): HttpResponse =
         gate.withLock {
             var attempt = 0
             while (true) {
                 attempt += 1
-                throttle()
+                if (throttle) throttle()
                 val reply =
                     try {
-                        transport.get(urlString)
+                        if (method == "GET") transport.get(urlString)
+                        else transport.execute(method, urlString, body)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (error: Exception) {

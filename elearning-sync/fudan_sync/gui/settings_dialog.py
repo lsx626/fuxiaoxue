@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import __version__
 from ..config import load_config
 from ..password_login import clear_credentials
 from . import autostart
@@ -169,6 +170,31 @@ class SettingsDialog(QFrame):
         logout_button.clicked.connect(self._on_logout)
         account_form.addRow("", logout_button)
         content_layout.addWidget(account_box)
+
+        # ---- 使用说明与关于 ----
+        guide_box = QGroupBox("使用说明")
+        guide_layout = QVBoxLayout(guide_box)
+        guide = QLabel(
+            "登录后，课程主页会实时刷新课程和文件列表。课程设为“自动下载全部”时，后续新增文件会自动下载；"
+            "切换为“手动选择”后，可在文件名左侧勾选需要下载的文件，也可以在课程右键菜单中全选或清空。"
+            "文件列表支持按课程、代码和文件名搜索，双击已下载文件即可在应用内预览。"
+        )
+        guide.setWordWrap(True)
+        guide.setObjectName("hint")
+        guide_layout.addWidget(guide)
+        content_layout.addWidget(guide_box)
+
+        about_box = QGroupBox(f"关于复小学 · {__version__}")
+        about_layout = QVBoxLayout(about_box)
+        about = QLabel(
+            "复小学用于整理个人可访问的 eLearning 课程资料。\n"
+            "课件、文件及其中的文字、图片和其他内容，版权归对应老师、教学团队或出版方所有。"
+            "请仅在获得授权的范围内使用、保存和分享。"
+        )
+        about.setWordWrap(True)
+        about.setObjectName("hint")
+        about_layout.addWidget(about)
+        content_layout.addWidget(about_box)
 
         content_layout.addStretch()
 

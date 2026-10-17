@@ -73,7 +73,7 @@ internal fun SyncStatusStrip(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun SyncTaskSheet(viewModel: AppViewModel, onDismiss: () -> Unit, onFullSync: () -> Unit) {
+internal fun SyncTaskSheet(viewModel: AppViewModel, onDismiss: () -> Unit) {
     val progress by viewModel.syncProgress.collectAsState()
     val syncing by viewModel.syncing.collectAsState()
     val busy by viewModel.taskBusy.collectAsState()
@@ -166,9 +166,6 @@ internal fun SyncTaskSheet(viewModel: AppViewModel, onDismiss: () -> Unit, onFul
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text(stringResource(R.string.action_sync))
-                }
-                TextButton(onFullSync, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                    Text(stringResource(R.string.menu_sync_full))
                 }
             }
         }

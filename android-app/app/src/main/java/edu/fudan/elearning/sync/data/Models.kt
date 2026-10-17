@@ -7,6 +7,8 @@ data class Course(
     val code: String = "",
     val term: String = "",
     val lastSyncedAt: String? = null,
+    /** 勾选整门课程后，同步会下载该课所有现有文件及后续新增文件。 */
+    val selected: Boolean = false,
 )
 
 /** 文件数据模型 */
@@ -25,6 +27,8 @@ data class FileItem(
     val updatedAt: String = "",
     /** 失败原因（或锁定说明）；界面直接展示给用户排障（v1.2.2）。 */
     val error: String = "",
+    /** 未勾选整门课程时，用户是否单独勾选了此文件（v1.3.2）。 */
+    val selected: Boolean = false,
 )
 
 /** 同步运行记录 */
@@ -46,6 +50,8 @@ data class CourseStats(
     val filesTotal: Int,
     val filesDone: Int,
     val bytesDownloaded: Long,
+    val filesSelected: Int = 0,
+    val filesSelectable: Int = 0,
 )
 
 /** 搜索结果（跨课程的本地全文搜索，见 Repo.searchFiles） */

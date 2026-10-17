@@ -1,7 +1,6 @@
 package edu.fudan.elearning.sync.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
@@ -45,7 +44,7 @@ internal fun StorageScreen(viewModel: AppViewModel) {
     LazyColumn(
         Modifier.fillMaxSize().testTag("storage-list"),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item {
             ScreenHeading(
@@ -79,44 +78,48 @@ internal fun StorageScreen(viewModel: AppViewModel) {
             items(visible, key = { it.course.id }) { course ->
                 Surface(
                     Modifier.fillMaxWidth().clickable { selectedId = course.course.id },
-                    shape = MaterialTheme.shapes.medium,
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0f),
                 ) {
-                    Row(
-                        Modifier.padding(18.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(
-                            Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                    Column {
+                        Row(
+                            Modifier.padding(horizontal = 4.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
+                            Column(
+                                Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Text(
+                                    FileUtils.cleanCourseName(course.course.name),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    course.course.term,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    stringResource(
+                                        R.string.course_file_summary,
+                                        course.filesTotal,
+                                        course.filesDone,
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                             Text(
-                                FileUtils.cleanCourseName(course.course.name),
-                                style = MaterialTheme.typography.titleSmall,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                course.course.term,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                stringResource(
-                                    R.string.course_file_summary,
-                                    course.filesTotal,
-                                    course.filesDone,
-                                ),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                FileUtils.formatBytes(course.bytesDownloaded),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary,
                             )
                         }
-                        Text(
-                            FileUtils.formatBytes(course.bytesDownloaded),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
+                        HorizontalDivider(
+                            Modifier.padding(start = 4.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant,
                         )
                     }
                 }

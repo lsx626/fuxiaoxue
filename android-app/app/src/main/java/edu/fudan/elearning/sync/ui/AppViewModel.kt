@@ -1,6 +1,8 @@
 package edu.fudan.elearning.sync.ui
 
 import android.app.Application
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import edu.fudan.elearning.sync.auth.*
@@ -15,6 +17,8 @@ import java.io.File
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 sealed class LoginState {
     object Loading : LoginState()
@@ -37,6 +41,20 @@ data class PreviewTarget(
 )
 
 data class PreviewSibling(val fileId: Long, val path: String, val title: String)
+
+data class TaskSubmissionFile(val file: File, val displayName: String) {
+    val size: Long
+        get() = file.length()
+}
+
+enum class TaskSubmissionMode {
+    FILE,
+    TEXT,
+    URL,
+}
+
+private const val MAX_SUBMISSION_FILES = 10
+private const val MAX_SUBMISSION_BYTES = 512L * 1024 * 1024
 
 data class SyncProgressUi(
     val phase: String = "",
@@ -99,6 +117,10 @@ constructor(
     val syncError: StateFlow<String?> = _syncError
     private val _needsReauth = MutableStateFlow(false)
     val needsReauth: StateFlow<Boolean> = _needsReauth
+    private val _profileName = MutableStateFlow("")
+    val profileName: StateFlow<String> = _profileName
+    private val _profileAvatarUrl = MutableStateFlow("")
+    val profileAvatarUrl: StateFlow<String> = _profileAvatarUrl
     private val _dataVersion = MutableStateFlow(0)
     val dataVersion: StateFlow<Int> = _dataVersion
     private val _selectedCourseId = MutableStateFlow<Long?>(null)
@@ -108,6 +130,22 @@ constructor(
             .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     private val _previewTarget = MutableStateFlow<PreviewTarget?>(null)
     val previewTarget: StateFlow<PreviewTarget?> = _previewTarget
+    private val _taskAssignment = MutableStateFlow<Assignment?>(null)
+    val taskAssignment: StateFlow<Assignment?> = _taskAssignment
+    private val _taskDetail = MutableStateFlow<CanvasAssignment?>(null)
+    val taskDetail: StateFlow<CanvasAssignment?> = _taskDetail
+    private val _taskLoading = MutableStateFlow(false)
+    val taskLoading: StateFlow<Boolean> = _taskLoading
+    private val _taskError = MutableStateFlow<String?>(null)
+    val taskError: StateFlow<String?> = _taskError
+    private val _taskSubmitting = MutableStateFlow(false)
+    val taskSubmitting: StateFlow<Boolean> = _taskSubmitting
+    private val _taskSubmitError = MutableStateFlow<String?>(null)
+    val taskSubmitError: StateFlow<String?> = _taskSubmitError
+    private val _taskSubmitSuccess = MutableStateFlow<String?>(null)
+    val taskSubmitSuccess: StateFlow<String?> = _taskSubmitSuccess
+    private val _taskSubmissionFiles = MutableStateFlow<List<TaskSubmissionFile>>(emptyList())
+    val taskSubmissionFiles: StateFlow<List<TaskSubmissionFile>> = _taskSubmissionFiles
     private val _searchOpen = MutableStateFlow(false)
     val searchOpen: StateFlow<Boolean> = _searchOpen
     private val _searchQuery = MutableStateFlow("")
@@ -126,7 +164,11 @@ constructor(
     private var mutationJob: Job? = null
     private var searchJob: Job? = null
     private var previewJob: Job? = null
+    private var taskJob: Job? = null
+    private var taskSubmitJob: Job? = null
     private var settingsJob: Job? = null
+    private val taskAuthMutex = Mutex()
+    private val submissionFileMutex = Mutex()
 
     init {
         if (autoStart) autoLogin()
@@ -155,6 +197,10 @@ constructor(
                             SecurePrefs.loadPassword(getApplication()),
                         )
                     }
+                val cachedProfile =
+                    withContext(Dispatchers.IO) { prefs.profileName to prefs.profileAvatarUrl }
+                _profileName.value = cachedProfile.first
+                _profileAvatarUrl.value = cachedProfile.second
                 refreshLibrary()
                 if (saved.first.isNotBlank() && saved.second) {
                     _loginState.value = LoginState.LoggedIn(saved.first)
@@ -179,6 +225,7 @@ constructor(
                         SyncGate.runWaiting { applySession(result.session) }
                         _needsReauth.value = false
                         _loginState.value = LoginState.LoggedIn(saved.first)
+                        refreshProfile()
                         scheduleBackground()
                         sync()
                     }
@@ -203,6 +250,13 @@ constructor(
                         is LoginResult.Success -> {
                             SyncGate.runWaiting {
                                 withContext(Dispatchers.IO) {
+                                    if (
+                                        prefs.username.isNotBlank() &&
+                                            prefs.username != username.trim()
+                                    ) {
+                                        prefs.profileName = ""
+                                        prefs.profileAvatarUrl = ""
+                                    }
                                     prefs.username = username.trim()
                                     prefs.loggedIn = true
                                     if (remember)
@@ -213,6 +267,7 @@ constructor(
                             }
                             loadSettings()
                             _loginState.value = LoginState.LoggedIn(username.trim())
+                            refreshProfile()
                             _needsReauth.value = false
                             _syncError.value = null
                             scheduleBackground()
@@ -232,6 +287,33 @@ constructor(
 
     private fun applySession(session: AuthSession) =
         ApiClient.setSession(session.canvasSessionCookie, session.csrfToken, session.cookieName)
+
+    private fun refreshProfile() {
+        viewModelScope.launch {
+            try {
+                val profile = withContext(Dispatchers.IO) { api.getCurrentUser() } ?: return@launch
+                val safeAvatar =
+                    runCatching {
+                            java.net
+                                .URI("https://elearning.fudan.edu.cn/")
+                                .resolve(profile.avatarUrl)
+                        }
+                        .getOrNull()
+                        ?.takeIf { it.scheme == "https" && !it.host.isNullOrBlank() }
+                        ?.toString()
+                        .orEmpty()
+                withContext(Dispatchers.IO) {
+                    if (profile.name.isNotBlank()) prefs.profileName = profile.name
+                    if (safeAvatar.isNotBlank() || profile.avatarUrl.isBlank())
+                        prefs.profileAvatarUrl = safeAvatar
+                }
+                _profileName.value = profile.name.ifBlank { _profileName.value }
+                _profileAvatarUrl.value = safeAvatar
+            } catch (_: Exception) {
+                // 资料接口故障时继续显示上次缓存的资料。
+            }
+        }
+    }
 
     fun requestReauth() {
         authJob?.cancel()
@@ -268,12 +350,16 @@ constructor(
                 withContext(Dispatchers.IO) {
                     SecurePrefs.clear(getApplication())
                     prefs.loggedIn = false
+                    prefs.profileName = ""
+                    prefs.profileAvatarUrl = ""
                     SyncWorker.cancel(getApplication())
                 }
                 ApiClient.clearSession()
                 _courses.value = emptyList()
                 _upcomingAssignments.value = emptyList()
                 _recentChanges.value = emptyList()
+                _profileName.value = ""
+                _profileAvatarUrl.value = ""
                 _selectedCourseId.value = null
                 _needsReauth.value = false
                 _syncError.value = null
@@ -311,7 +397,8 @@ constructor(
                                 val report: (String, Int, Int, String, Long) -> Unit =
                                     ::updateSyncProgress
                                 syncRunner?.invoke(full, report)
-                                    ?: SyncEngine(getApplication(), api, repo).sync(full, report)
+                                    ?: SyncEngine(getApplication(), api, repo)
+                                        .sync(full = full, onProgress = report)
                             }
                         }
                     if (result == null) {
@@ -384,6 +471,27 @@ constructor(
         syncJob?.cancel()
     }
 
+    fun toggleFileSelected(file: FileItem) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { repo.setFileSelected(file.fileId, !file.selected) }
+            refreshLibrary()
+        }
+    }
+
+    fun setCourseFilesSelected(courseId: Long, selected: Boolean) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { repo.setCourseFilesSelected(courseId, selected) }
+            refreshLibrary()
+        }
+    }
+
+    fun setCourseSelected(courseId: Long, selected: Boolean) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { repo.setCourseSelected(courseId, selected) }
+            refreshLibrary()
+        }
+    }
+
     fun clearSyncError() {
         _syncError.value = null
     }
@@ -433,6 +541,9 @@ constructor(
 
     suspend fun filesOf(courseId: Long): List<FileItem> =
         withContext(Dispatchers.IO) { repo.getVisibleFilesByCourse(courseId) }
+
+    suspend fun courseIdsMatchingFileName(query: String): Set<Long> =
+        withContext(Dispatchers.IO) { repo.courseIdsMatchingFileName(query) }
 
     suspend fun storageFilesOf(courseId: Long): List<FileItem> =
         withContext(Dispatchers.IO) { repo.getFilesByCourse(courseId) }
@@ -673,6 +784,226 @@ constructor(
                     showMessage("暂时无法打开文件，请重试")
                 }
             }
+    }
+
+    fun openAssignment(assignment: Assignment) {
+        taskJob?.cancel()
+        taskSubmitJob?.cancel()
+        clearTaskSubmissionFiles()
+        _taskAssignment.value = assignment
+        _taskDetail.value = null
+        _taskError.value = null
+        _taskSubmitError.value = null
+        _taskSubmitSuccess.value = null
+        _taskSubmitting.value = false
+        _taskLoading.value = true
+        reloadAssignment(assignment)
+    }
+
+    fun closeAssignment() {
+        taskJob?.cancel()
+        taskSubmitJob?.cancel()
+        clearTaskSubmissionFiles()
+        _taskAssignment.value = null
+        _taskDetail.value = null
+        _taskError.value = null
+        _taskSubmitError.value = null
+        _taskSubmitSuccess.value = null
+        _taskSubmitting.value = false
+        _taskLoading.value = false
+    }
+
+    fun refreshAssignment() {
+        val assignment = _taskAssignment.value ?: return
+        reloadAssignment(assignment)
+    }
+
+    private fun reloadAssignment(assignment: Assignment) {
+        taskJob?.cancel()
+        _taskLoading.value = true
+        _taskError.value = null
+        taskJob =
+            viewModelScope.launch {
+                try {
+                    val detail = fetchAssignmentWithSession(assignment)
+                    if (_taskAssignment.value?.id == assignment.id) _taskDetail.value = detail
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: ApiException.Auth) {
+                    _taskError.value = "登录状态已失效。请在设置中重新登录后再打开任务。"
+                    _needsReauth.value = true
+                } catch (error: ApiException.Server) {
+                    _taskError.value = "任务页面暂时无法载入：${error.message}"
+                } catch (_: Exception) {
+                    _taskError.value = "任务页面暂时无法载入，请检查网络后重试。"
+                } finally {
+                    if (_taskAssignment.value?.id == assignment.id) _taskLoading.value = false
+                }
+            }
+    }
+
+    /** 会话失效时使用与本地同步完全相同、保存在 Keystore 中的账号密码静默登录。 */
+    private suspend fun refreshTaskSession(): Boolean =
+        taskAuthMutex.withLock {
+            val credentials =
+                withContext(Dispatchers.IO) {
+                    prefs.username to SecurePrefs.loadPassword(getApplication())
+                }
+            val username = credentials.first
+            val password = credentials.second
+            if (username.isBlank() || password.isNullOrEmpty()) return@withLock false
+            when (val result = authenticate(username, password)) {
+                is LoginResult.Success -> {
+                    applySession(result.session)
+                    _needsReauth.value = false
+                    _syncError.value = null
+                    true
+                }
+                is LoginResult.Failure -> false
+            }
+        }
+
+    private suspend fun fetchAssignmentWithSession(assignment: Assignment): CanvasAssignment {
+        return withTaskSession { api.getAssignment(assignment.courseId, assignment.id) }
+    }
+
+    private suspend fun <T> withTaskSession(block: suspend () -> T): T {
+        if (ApiClient.canvasSession.isEmpty() && !refreshTaskSession()) throw ApiException.Auth()
+        return try {
+            block()
+        } catch (auth: ApiException.Auth) {
+            if (!refreshTaskSession()) throw auth
+            block()
+        }
+    }
+
+    fun addTaskSubmissionFile(uri: Uri) {
+        if (_taskSubmitting.value) return
+        viewModelScope.launch {
+            submissionFileMutex.withLock {
+                try {
+                    val added =
+                        withContext(Dispatchers.IO) {
+                            val resolver = getApplication<Application>().contentResolver
+                            val name =
+                                resolver
+                                    .query(
+                                        uri,
+                                        arrayOf(OpenableColumns.DISPLAY_NAME),
+                                        null,
+                                        null,
+                                        null,
+                                    )
+                                    ?.use { cursor ->
+                                        if (cursor.moveToFirst()) cursor.getString(0) else null
+                                    }
+                                    ?.takeIf(String::isNotBlank) ?: "提交文件"
+                            val safeName = DownloadManager.sanitize(name)
+                            val targetDir =
+                                File(getApplication<Application>().cacheDir, "task-submit").apply {
+                                    mkdirs()
+                                }
+                            val target = File(targetDir, "${System.currentTimeMillis()}-$safeName")
+                            resolver.openInputStream(uri)?.use { input ->
+                                target.outputStream().use { output ->
+                                    val copied = input.copyTo(output, bufferSize = 64 * 1024)
+                                    if (copied <= 0 || copied > MAX_SUBMISSION_BYTES) {
+                                        target.delete()
+                                        error("单个提交文件需小于 512 MB")
+                                    }
+                                }
+                            } ?: error("无法读取所选文件")
+                            TaskSubmissionFile(target, safeName)
+                        }
+                    if (_taskSubmissionFiles.value.size >= MAX_SUBMISSION_FILES) {
+                        added.file.delete()
+                        _taskSubmitError.value = "一次最多添加 $MAX_SUBMISSION_FILES 个文件"
+                    } else {
+                        _taskSubmissionFiles.update { it + added }
+                        _taskSubmitError.value = null
+                        _taskSubmitSuccess.value = null
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    _taskSubmitError.value = error.message ?: "无法读取所选文件"
+                }
+            }
+        }
+    }
+
+    fun removeTaskSubmissionFile(file: TaskSubmissionFile) {
+        _taskSubmissionFiles.update { current -> current.filterNot { it.file == file.file } }
+        file.file.delete()
+    }
+
+    private fun clearTaskSubmissionFiles() {
+        val stale = _taskSubmissionFiles.value
+        _taskSubmissionFiles.value = emptyList()
+        viewModelScope.launch(Dispatchers.IO) { stale.forEach { runCatching { it.file.delete() } } }
+    }
+
+    fun submitAssignment(mode: TaskSubmissionMode, text: String = "", url: String = "") {
+        if (_taskSubmitting.value) return
+        val assignment = _taskAssignment.value ?: return
+        val files = _taskSubmissionFiles.value.map { it.file }
+        when (mode) {
+            TaskSubmissionMode.FILE ->
+                if (files.isEmpty()) {
+                    _taskSubmitError.value = "请先选择要提交的文件"
+                    return
+                }
+            TaskSubmissionMode.TEXT ->
+                if (text.isBlank()) {
+                    _taskSubmitError.value = "请输入要提交的文字内容"
+                    return
+                }
+            TaskSubmissionMode.URL ->
+                if (!url.startsWith("https://") && !url.startsWith("http://")) {
+                    _taskSubmitError.value = "请输入完整的网址"
+                    return
+                }
+        }
+        _taskSubmitError.value = null
+        _taskSubmitSuccess.value = null
+        _taskSubmitting.value = true
+        taskSubmitJob =
+            viewModelScope.launch {
+                try {
+                    val submission = withTaskSession {
+                        when (mode) {
+                            TaskSubmissionMode.FILE ->
+                                api.submitFiles(assignment.courseId, assignment.id, files)
+                            TaskSubmissionMode.TEXT ->
+                                api.submitText(assignment.courseId, assignment.id, text.trim())
+                            TaskSubmissionMode.URL ->
+                                api.submitUrl(assignment.courseId, assignment.id, url.trim())
+                        }
+                    }
+                    _taskDetail.update { it?.copy(submission = submission) }
+                    _taskSubmitSuccess.value = "提交成功"
+                    clearTaskSubmissionFiles()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: ApiException.Auth) {
+                    _taskSubmitError.value = "登录状态已失效，请重新登录后再提交。"
+                    _needsReauth.value = true
+                } catch (error: ApiException.Server) {
+                    _taskSubmitError.value = "提交未完成（HTTP ${error.code}）。请检查必填内容、文件格式或提交次数限制。"
+                } catch (error: Exception) {
+                    _taskSubmitError.value = "提交未完成：${error.message?.take(120) ?: "请稍后重试"}"
+                } finally {
+                    _taskSubmitting.value = false
+                }
+            }
+    }
+
+    fun openAttachment(attachmentId: Long) {
+        viewModelScope.launch {
+            val file = withContext(Dispatchers.IO) { repo.getFile(attachmentId) }
+            if (file?.status == "downloaded") openPreview(file)
+            else showMessage("附件尚未下载，请刷新文件列表后在课程资料中勾选下载")
+        }
     }
 
     fun openPreview(file: FileItem) {

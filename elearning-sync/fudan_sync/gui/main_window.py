@@ -47,6 +47,7 @@ from ..config import load_config
 from ..search_index import filter_file_records
 from ..state import StateStore
 from ..utils import clean_course_name, format_size, sanitize_path_component
+from .assignment_detail_dialog import AssignmentDetailDialog
 from .config_io import load_gui_state, save_gui_state
 from .deadlines_dialog import DeadlinesDialog
 from .icon import app_icon, line_icon
@@ -399,7 +400,7 @@ class MainWindow(QMainWindow):
         filters = QHBoxLayout()
         filters.setContentsMargins(18, 4, 18, 10)
         self.course_filter_edit = QLineEdit()
-        self.course_filter_edit.setPlaceholderText("查找课程名称或课程代码…")
+        self.course_filter_edit.setPlaceholderText("查找课程、代码或文件名…")
         self.course_filter_edit.setAccessibleName("查找课程")
         self.course_filter_edit.setClearButtonEnabled(True)
         self.course_filter_edit.textChanged.connect(self._apply_course_filter)
@@ -417,11 +418,11 @@ class MainWindow(QMainWindow):
         filters.addWidget(self.open_course_button)
         course_layout.addLayout(filters)
 
-        self.course_table = QTableWidget(0, 7)
+        self.course_table = QTableWidget(0, 8)
         self.course_table.setHorizontalHeaderLabels(
-            ["课程", "学期", "文件数", "已下载", "本地大小", "最近同步", "ID"]
+            ["课程", "学期", "文件数", "已下载", "本地大小", "下载方式", "最近同步", "ID"]
         )
-        self.course_table.setColumnHidden(6, True)
+        self.course_table.setColumnHidden(7, True)
         self.course_table.verticalHeader().setVisible(False)
         self.course_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.course_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -522,6 +523,7 @@ class MainWindow(QMainWindow):
         self.file_table.customContextMenuRequested.connect(self._file_context_menu)
         self.file_table.activated.connect(self._preview_selected_file)
         self.file_table.itemSelectionChanged.connect(self._update_file_actions)
+        self.file_table.itemChanged.connect(self._on_file_item_changed)
 
         file_header = self.file_table.horizontalHeader()
         file_header.setSectionResizeMode(0, QHeaderView.Stretch)
@@ -895,8 +897,11 @@ class MainWindow(QMainWindow):
             self._set_table_item(
                 row, 4, format_size(course.get("bytes_downloaded") or 0), align_right=True
             )
-            self._set_table_item(row, 5, _relative_time(course.get("last_synced_at")))
-            self._set_table_item(row, 6, str(course.get("id")))
+            self._set_table_item(
+                row, 5, "自动下载全部" if course.get("selected", 1) else "手动选择"
+            )
+            self._set_table_item(row, 6, _relative_time(course.get("last_synced_at")))
+            self._set_table_item(row, 7, str(course.get("id")))
         if selected_id is not None:
             self._select_course_row(selected_id)
         self.course_table.blockSignals(False)
@@ -908,12 +913,27 @@ class MainWindow(QMainWindow):
         courses = getattr(self, "_courses", [])
         query = self.course_filter_edit.text().strip().casefold()
         term = self.term_filter.currentData()
+        file_course_ids = set()
+        state = None
+        if query:
+            try:
+                state = StateStore(self.cfg.state_db)
+                file_course_ids = state.course_ids_matching_file_name(query)
+            except Exception:  # pylint: disable=broad-except
+                file_course_ids = set()
+            finally:
+                try:
+                    if state is not None:
+                        state.close()
+                except Exception:  # pylint: disable=broad-except
+                    pass
         shown = 0
         for row, course in enumerate(courses):
             matches = (not term or course.get("term") == term) and (
                 not query
                 or query
                 in " ".join(str(course.get(key) or "") for key in ("name", "code")).casefold()
+                or int(course.get("id") or 0) in file_course_ids
             )
             self.course_table.setRowHidden(row, not matches)
             shown += int(matches)
@@ -1062,47 +1082,85 @@ class MainWindow(QMainWindow):
             self.file_empty_label.setVisible(False)
 
     def _render_file_rows(self, files) -> None:
-        self.file_table.setRowCount(len(files))
-        for row, file_info in enumerate(files):
-            name = file_info.get("display_name") or file_info.get("filename", "未知文件")
-            size = file_info.get("size", 0) or 0
-            status = file_info.get("status", "pending")
-            downloaded_at = file_info.get("downloaded_at") or ""
+        self.file_table.blockSignals(True)
+        try:
+            self.file_table.setRowCount(len(files))
+            course = next(
+                (
+                    item
+                    for item in getattr(self, "_courses", [])
+                    if int(item.get("id") or 0) == int(self._current_file_course_id or 0)
+                ),
+                {},
+            )
+            manual_mode = not bool(course.get("selected", 1))
+            for row, file_info in enumerate(files):
+                name = file_info.get("display_name") or file_info.get("filename", "未知文件")
+                size = file_info.get("size", 0) or 0
+                status = file_info.get("status", "pending")
+                downloaded_at = file_info.get("downloaded_at") or ""
 
-            # 文件名
-            name_item = QTableWidgetItem(name)
-            name_item.setToolTip(name)
-            name_item.setData(Qt.UserRole, file_info.get("local_path", ""))
-            self.file_table.setItem(row, 0, name_item)
+                # 文件名
+                name_item = QTableWidgetItem(name)
+                name_item.setToolTip(name)
+                name_item.setData(Qt.UserRole, file_info.get("local_path", ""))
+                name_item.setData(Qt.UserRole + 1, file_info.get("file_id"))
+                if manual_mode and status in ("pending", "failed"):
+                    name_item.setFlags(name_item.flags() | Qt.ItemIsUserCheckable)
+                    name_item.setCheckState(
+                        Qt.Checked if file_info.get("selected") else Qt.Unchecked
+                    )
+                self.file_table.setItem(row, 0, name_item)
 
-            # 大小
-            size_item = QTableWidgetItem(format_size(size))
-            size_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.file_table.setItem(row, 1, size_item)
+                # 大小
+                size_item = QTableWidgetItem(format_size(size))
+                size_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.file_table.setItem(row, 1, size_item)
 
-            # 状态
-            status_text, status_color = self._format_file_status(status)
-            status_item = QTableWidgetItem(status_text)
-            status_item.setTextAlignment(Qt.AlignCenter)
-            status_item.setForeground(QColor(status_color))
-            # v1.2.2：失败/锁定时把原因放进 tooltip——用户不用翻日志就能知道为什么
-            failure_reason = (file_info.get("last_error") or "").strip()
-            if status in ("failed", "locked") and failure_reason:
-                status_item.setToolTip(failure_reason)
-            self.file_table.setItem(row, 2, status_item)
+                # 状态
+                status_text, status_color = self._format_file_status(status)
+                status_item = QTableWidgetItem(status_text)
+                status_item.setTextAlignment(Qt.AlignCenter)
+                status_item.setForeground(QColor(status_color))
+                # v1.2.2：失败/锁定时把原因放进 tooltip——用户不用翻日志就能知道为什么
+                failure_reason = (file_info.get("last_error") or "").strip()
+                if status in ("failed", "locked") and failure_reason:
+                    status_item.setToolTip(failure_reason)
+                self.file_table.setItem(row, 2, status_item)
 
-            # 阅读进度
-            progress_text, progress_color = self._reading_progress_text(file_info)
-            progress_item = QTableWidgetItem(progress_text)
-            progress_item.setTextAlignment(Qt.AlignCenter)
-            progress_item.setForeground(QColor(progress_color))
-            self.file_table.setItem(row, 3, progress_item)
+                # 阅读进度
+                progress_text, progress_color = self._reading_progress_text(file_info)
+                progress_item = QTableWidgetItem(progress_text)
+                progress_item.setTextAlignment(Qt.AlignCenter)
+                progress_item.setForeground(QColor(progress_color))
+                self.file_table.setItem(row, 3, progress_item)
 
-            # 下载时间
-            time_text = _relative_time(downloaded_at) if downloaded_at else "—"
-            time_item = QTableWidgetItem(time_text)
-            time_item.setTextAlignment(Qt.AlignCenter)
-            self.file_table.setItem(row, 4, time_item)
+                # 下载时间
+                time_text = _relative_time(downloaded_at) if downloaded_at else "—"
+                time_item = QTableWidgetItem(time_text)
+                time_item.setTextAlignment(Qt.AlignCenter)
+                self.file_table.setItem(row, 4, time_item)
+        finally:
+            self.file_table.blockSignals(False)
+
+    def _on_file_item_changed(self, item: QTableWidgetItem) -> None:
+        if item.column() != 0 or not (item.flags() & Qt.ItemIsUserCheckable):
+            return
+        file_id = item.data(Qt.UserRole + 1)
+        if not file_id:
+            return
+        state = None
+        try:
+            state = StateStore(self.cfg.state_db)
+            state.set_file_selected(int(file_id), item.checkState() == Qt.Checked)
+            if self._current_file_course_id is not None:
+                state.set_course_selected(self._current_file_course_id, False)
+        except Exception as exc:  # pylint: disable=broad-except
+            self._on_log("error", "保存文件下载选择失败: %s", exc)
+        finally:
+            if state is not None:
+                state.close()
+        self._refresh_stats()
 
     def _reading_progress_text(self, file_info: dict) -> tuple:
         """v1.1.2：进度列文案。无记录返回「未读」（强调色），媒体显示时间。"""
@@ -1235,7 +1293,7 @@ class MainWindow(QMainWindow):
 
     def _select_course_row(self, course_id: int) -> None:
         for row in range(self.course_table.rowCount()):
-            item = self.course_table.item(row, 6)
+            item = self.course_table.item(row, 7)
             if item is not None and item.text() == str(course_id):
                 self.course_table.selectRow(row)
                 return
@@ -1299,6 +1357,10 @@ class MainWindow(QMainWindow):
     def _open_deadlines(self) -> None:
         """打开作业截止日期对话框（带 .ics 导出）。"""
         DeadlinesDialog(self.cfg.state_db, parent=self).show()
+
+    def _open_assignment_detail(self, assignment: dict) -> None:
+        """在应用内打开任务详情、提交状态和评论。"""
+        AssignmentDetailDialog(self.cfg, assignment, parent=self).show()
 
     def _open_recent_changes(self) -> None:
         """打开最近变更对话框（文件级同步 diff）。"""
@@ -1397,7 +1459,7 @@ class MainWindow(QMainWindow):
         row = self.course_table.currentRow()
         if row < 0:
             return None
-        item = self.course_table.item(row, 6)
+        item = self.course_table.item(row, 7)
         if item is None:
             return None
         try:
@@ -1414,18 +1476,60 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
         resume_action = menu.addAction("继续阅读（最近阅读的文件）")
         menu.addSeparator()
+        auto_action = menu.addAction("自动下载全部资料（含未来新增）")
+        manual_action = menu.addAction("手动选择要下载的文件")
+        select_all_action = menu.addAction("手动模式：全选待下载文件")
+        clear_selection_action = menu.addAction("手动模式：清空文件选择")
+        menu.addSeparator()
         open_action = menu.addAction("打开课程目录")
         sync_action = menu.addAction("仅同步此课程")
         portal_action = menu.addAction("在浏览器中打开课程")
         action = menu.exec(self.course_table.viewport().mapToGlobal(position))
         if action == resume_action:
             self._resume_reading(course_id)
+        elif action == auto_action:
+            self._set_course_download_mode(course_id, True)
+        elif action == manual_action:
+            self._set_course_download_mode(course_id, False)
+        elif action == select_all_action:
+            self._set_course_files_selected(course_id, True)
+        elif action == clear_selection_action:
+            self._set_course_files_selected(course_id, False)
         elif action == open_action:
             self._open_course_dir(course_id)
         elif action == sync_action:
             self._start_sync(full=False, course_ids=[course_id])
         elif action == portal_action:
             webbrowser.open(f"{self.cfg.base_url}/courses/{course_id}")
+
+    def _set_course_download_mode(self, course_id: int, automatic: bool) -> None:
+        state = None
+        try:
+            state = StateStore(self.cfg.state_db)
+            state.set_course_selected(course_id, automatic)
+        except Exception as exc:  # pylint: disable=broad-except
+            self._on_log("error", "保存课程下载方式失败: %s", exc)
+        finally:
+            if state is not None:
+                state.close()
+        self._refresh_stats()
+        if self._file_panel_visible and self._current_file_course_id == course_id:
+            self._populate_file_list(course_id)
+
+    def _set_course_files_selected(self, course_id: int, selected: bool) -> None:
+        state = None
+        try:
+            state = StateStore(self.cfg.state_db)
+            state.set_course_selected(course_id, False)
+            state.set_course_files_selected(course_id, selected)
+        except Exception as exc:  # pylint: disable=broad-except
+            self._on_log("error", "保存文件下载选择失败: %s", exc)
+        finally:
+            if state is not None:
+                state.close()
+        self._refresh_stats()
+        if self._file_panel_visible and self._current_file_course_id == course_id:
+            self._populate_file_list(course_id)
 
     def _resume_reading(self, course_id: Optional[int] = None) -> None:
         """v1.1.2：直接打开该课程最近阅读的文件（没有记录则提示）。"""

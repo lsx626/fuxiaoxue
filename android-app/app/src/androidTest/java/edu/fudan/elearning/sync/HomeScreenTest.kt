@@ -215,7 +215,6 @@ class HomeScreenTest {
     fun settingsChangeThemeAndInterval() {
         launch()
         tab("SETTINGS")
-        compose.onNodeWithText("20260001").assertExists()
         compose.onNodeWithTag("settings-list").performScrollToNode(hasText("显示主题"))
         compose.onNodeWithText("显示主题").performClick()
         compose.onNodeWithText("深色").performClick()
@@ -224,6 +223,16 @@ class HomeScreenTest {
         compose.onNodeWithText("后台同步频率").performClick()
         compose.onNodeWithText("30 分钟").performClick()
         assertEquals(30, vm.settings.value.syncInterval)
+    }
+
+    @Test
+    fun settingsShowsBuiltInGuide() {
+        launch()
+        tab("SETTINGS")
+        compose.onNodeWithTag("settings-list").performScrollToNode(hasText("使用说明"))
+        compose.onNodeWithTag("settings-user-guide").performClick()
+        compose.onNodeWithText("选择下载方式").assertIsDisplayed()
+        compose.onNodeWithText("关闭").performClick()
     }
 
     @Test
@@ -252,13 +261,11 @@ class HomeScreenTest {
     }
 
     @Test
-    fun fullSyncRequiresExplicitConfirmation() {
+    fun syncMenuUsesSelectedScopeInsteadOfFullDownload() {
         launch()
+        compose.onNodeWithTag("sync-icon").assertExists()
         compose.onNodeWithContentDescription("更多操作").performClick()
-        compose.onNodeWithText("全量同步（重新下载全部文件）").performClick()
-        compose.onNodeWithText("重新下载全部资料？").assertExists()
-        compose.onNodeWithText("取消").performClick()
-        assertFalse(vm.syncing.value)
+        compose.onAllNodesWithText("全量同步（重新下载全部文件）").assertCountEquals(0)
     }
 
     @Test

@@ -120,6 +120,13 @@ class SyncEngine(private val context: Context, private val api: CanvasApi, priva
         var failedCourses = 0
         var filesRemoved = 0
         var fatal: ApiException? = null
+        val selectedCourseIds = repo.selectedCourseIds()
+        val selectedFilesByCourse =
+            repo
+                .selectedFiles()
+                .filter { it.courseId !in selectedCourseIds }
+                .groupBy { it.courseId }
+                .mapValues { (_, files) -> files.map { it.fileId }.toSet() }
 
         for ((index, canvasCourse) in validCourses.withIndex()) {
             currentCoroutineContext().ensureActive()
@@ -172,12 +179,17 @@ class SyncEngine(private val context: Context, private val api: CanvasApi, priva
 
             val stats = CourseStats()
             try {
-                syncCourseBody(canvasCourse, outcome, full, stats, startedAt) {
-                    phase,
-                    done,
-                    total,
-                    message,
-                    bytes ->
+                val courseSelected = canvasCourse.id in selectedCourseIds
+                val selectedFileIds = selectedFilesByCourse[canvasCourse.id].orEmpty()
+                syncCourseBody(
+                    canvasCourse,
+                    outcome,
+                    full,
+                    courseSelected,
+                    selectedFileIds,
+                    stats,
+                    startedAt,
+                ) { phase, done, total, message, bytes ->
                     onProgress(phase, done, total, message, bytesDownloaded + bytes)
                 }
             } catch (cancelled: CancellationException) {
@@ -256,6 +268,8 @@ class SyncEngine(private val context: Context, private val api: CanvasApi, priva
         canvasCourse: edu.fudan.elearning.sync.network.CanvasCourse,
         outcome: CrawlOutcome,
         full: Boolean,
+        courseSelected: Boolean,
+        selectedFileIds: Set<Long>,
         stats: CourseStats,
         startedAt: String,
         onProgress: (phase: String, done: Int, total: Int, message: String, bytes: Long) -> Unit,
@@ -284,6 +298,25 @@ class SyncEngine(private val context: Context, private val api: CanvasApi, priva
             }
 
             val existing = existingFiles.firstOrNull { it.fileId == remote.fileId }
+            if (existing == null) {
+                // 所有课程都要完整落库；未勾选课程的新文件只出现在列表，不自动下载。
+                repo.upsertFile(
+                    FileItem(
+                        fileId = remote.fileId,
+                        courseId = canvasCourse.id,
+                        name = remote.displayName.ifEmpty { remote.filename },
+                        filename = remote.filename,
+                        folderPath = remote.folderPath,
+                        size = remote.size,
+                        status = SyncPolicy.STATUS_PENDING,
+                        url = remote.url,
+                        updatedAt = remote.updatedAt,
+                    )
+                )
+            }
+            if (!SyncPolicy.fileInSyncScope(courseSelected, selectedFileIds, remote.fileId))
+                continue
+
             val localPath = existing?.localPath.orEmpty()
             val localFile = localPath.takeIf { it.isNotEmpty() }?.let { File(it) }
             val needs =
@@ -400,6 +433,10 @@ class SyncEngine(private val context: Context, private val api: CanvasApi, priva
                                 url = task.remote.url,
                                 updatedAt = task.remote.updatedAt,
                                 error = download.reason,
+                                selected =
+                                    existingFiles
+                                        .firstOrNull { it.fileId == task.remote.fileId }
+                                        ?.selected == true,
                             )
                         )
                         onProgress(
@@ -470,6 +507,205 @@ class SyncEngine(private val context: Context, private val api: CanvasApi, priva
             }
         }
         repo.updateCourseLastSync(canvasCourse.id, startedAt)
+    }
+
+    /**
+     * 下载用户在列表里勾选的文件。
+     *
+     * 下载地址来自最近一次列表刷新；Canvas 的签名地址过期时复用 [downloadWithRenewedUrl] 换取新地址。 失败行保留勾选，成功行清除勾选，便于用户直接重试失败项。
+     */
+    suspend fun downloadSelected(
+        fileIds: Set<Long>,
+        onProgress: (phase: String, done: Int, total: Int, message: String, bytes: Long) -> Unit =
+            { _, _, _, _, _ ->
+            },
+    ): SyncResult {
+        val startedAt = now()
+        val records =
+            fileIds
+                .mapNotNull { repo.getFile(it) }
+                .filter {
+                    it.status == SyncPolicy.STATUS_PENDING || it.status == SyncPolicy.STATUS_FAILED
+                }
+                .distinctBy { it.fileId }
+        if (records.isEmpty()) return SyncResult()
+
+        var downloaded = 0
+        var failed = 0
+        var bytes = 0L
+        var completed = 0
+        onProgress("file", 0, records.size, "开始下载 ${records.size} 个已选文件…", 0L)
+
+        for ((courseId, courseRecords) in records.groupBy { it.courseId }) {
+            currentCoroutineContext().ensureActive()
+            val courseDirectory = downloader.courseDir(repo.courseName(courseId))
+            val courseFiles = repo.getFilesByCourse(courseId)
+            val reservedNamesByDirectory = mutableMapOf<String, MutableSet<String>>()
+            courseFiles.forEach { record ->
+                val path = record.localPath.takeIf { it.isNotBlank() } ?: return@forEach
+                val local = File(path)
+                if (!isInside(courseDirectory, local)) return@forEach
+                val dirKey = local.parentFile?.absolutePath ?: courseDirectory.absolutePath
+                reservedNamesByDirectory.getOrPut(dirKey) { mutableSetOf() }.add(local.name)
+            }
+
+            val tasks = mutableListOf<DownloadTask>()
+            for (record in courseRecords) {
+                if (record.url.isBlank()) {
+                    failed += 1
+                    completed += 1
+                    repo.upsertFile(
+                        record.copy(
+                            status = SyncPolicy.STATUS_FAILED,
+                            selected = true,
+                            error = "缺少下载地址，请先刷新文件列表",
+                        )
+                    )
+                    continue
+                }
+                val filename =
+                    DownloadManager.sanitize(
+                        record.filename.ifBlank { record.name.ifBlank { record.fileId.toString() } }
+                    )
+                val relativeDirectory = DownloadPlan.safeRelativeDir(record.folderPath)
+                val targetDir =
+                    if (relativeDirectory.isEmpty()) courseDirectory
+                    else File(courseDirectory, relativeDirectory)
+                val taken =
+                    reservedNamesByDirectory.getOrPut(targetDir.absolutePath) { mutableSetOf() }
+                val previous =
+                    record.localPath
+                        .takeIf { it.isNotBlank() }
+                        ?.let(::File)
+                        ?.takeIf { isInside(courseDirectory, it) }
+                val destination = previous ?: downloader.destinationFor(targetDir, filename, taken)
+                taken += destination.name
+                if (!isInside(courseDirectory, destination)) {
+                    failed += 1
+                    completed += 1
+                    repo.upsertFile(
+                        record.copy(
+                            status = SyncPolicy.STATUS_FAILED,
+                            selected = true,
+                            error = "文件路径越界，已拒绝写入",
+                        )
+                    )
+                    continue
+                }
+                tasks +=
+                    DownloadTask(
+                        remote =
+                            RemoteFileRef(
+                                fileId = record.fileId,
+                                displayName = record.name,
+                                filename = record.filename,
+                                size = record.size,
+                                url = record.url,
+                                folderPath = relativeDirectory,
+                                updatedAt = record.updatedAt,
+                                sources = "selected",
+                            ),
+                        destination = destination,
+                        filename = filename,
+                        relativeDirectory = relativeDirectory,
+                        displayName = record.name,
+                        previousDownloadedAt = record.downloadedAt,
+                    )
+            }
+
+            processDownloads(
+                tasks,
+                DOWNLOAD_CONCURRENCY,
+                download = { downloadWithRenewedUrl(courseId, it) },
+            ) { task, result ->
+                currentCoroutineContext().ensureActive()
+                completed += 1
+                val current = repo.getFile(task.remote.fileId) ?: return@processDownloads
+                when (result) {
+                    is DownloadOutcome.Success -> {
+                        downloaded += 1
+                        bytes += result.bytes
+                        val updated =
+                            current.copy(
+                                localPath = result.path.absolutePath,
+                                size = result.bytes,
+                                status = SyncPolicy.STATUS_DOWNLOADED,
+                                downloadedAt = now(),
+                                error = "",
+                                selected = false,
+                                updatedAt = task.remote.updatedAt,
+                            )
+                        repo.upsertFile(updated)
+                        SearchIndexer.indexFile(context, repo, updated)
+                        runCatching {
+                            repo.recordFileChange(
+                                runId = 0,
+                                file = updated,
+                                change =
+                                    if (task.previousDownloadedAt.isNullOrEmpty()) "new"
+                                    else "updated",
+                            )
+                        }
+                        onProgress("file", completed, records.size, "下载：${task.displayName}", bytes)
+                    }
+                    is DownloadOutcome.Failed -> {
+                        failed += 1
+                        repo.upsertFile(
+                            current.copy(
+                                localPath = task.destination.absolutePath,
+                                status = SyncPolicy.STATUS_FAILED,
+                                selected = true,
+                                error = result.reason,
+                            )
+                        )
+                        onProgress(
+                            "file",
+                            completed,
+                            records.size,
+                            "失败：${task.displayName}（${result.reason}）",
+                            bytes,
+                        )
+                        if (!result.retryable && result.reason.contains("登录")) {
+                            throw ApiException.Auth()
+                        }
+                    }
+                }
+            }
+        }
+
+        try {
+            SearchIndexer.backfill(context, repo) { message ->
+                onProgress("index", 0, 0, message, bytes)
+            }
+        } catch (_: Exception) {}
+
+        val result =
+            SyncResult(
+                filesTotal = records.size,
+                filesDownloaded = downloaded,
+                bytesDownloaded = bytes,
+                filesFailed = failed,
+            )
+        runCatching {
+            repo.recordRun(
+                SyncRun(
+                    startedAt = startedAt,
+                    finishedAt = now(),
+                    mode = "selected",
+                    filesDownloaded = downloaded,
+                    bytesDownloaded = bytes,
+                    filesFailed = failed,
+                )
+            )
+        }
+        onProgress(
+            "done",
+            downloaded,
+            records.size,
+            if (failed > 0) "下载完成，$failed 个文件需要重试" else "已选文件下载完成",
+            bytes,
+        )
+        return result
     }
 
     private fun finishSync(

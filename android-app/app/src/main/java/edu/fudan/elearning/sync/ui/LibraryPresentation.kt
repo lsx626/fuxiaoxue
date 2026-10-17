@@ -17,13 +17,15 @@ internal fun filterLibraryCourses(
     courses: List<CourseStats>,
     query: String,
     term: String?,
+    fileMatchedCourseIds: Set<Long> = emptySet(),
 ): List<CourseStats> {
     val text = query.trim()
     return courses.filter {
         (term == null || it.course.term == term) &&
             (text.isEmpty() ||
                 it.course.name.contains(text, ignoreCase = true) ||
-                it.course.code.contains(text, ignoreCase = true))
+                it.course.code.contains(text, ignoreCase = true) ||
+                it.course.id in fileMatchedCourseIds)
     }
 }
 

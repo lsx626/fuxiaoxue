@@ -72,6 +72,7 @@ class DeadlinesDialog(QDialog):
         layout.addWidget(self.status_label)
 
         self.list_widget = QListWidget()
+        self.list_widget.itemDoubleClicked.connect(self._open_detail)
         self.list_widget.setStyleSheet(
             f"QListWidget {{ background: {CARD}; border: 1px solid #E2E7F1;"
             f" border-radius: 8px; }}"
@@ -93,7 +94,7 @@ class DeadlinesDialog(QDialog):
             self.status_label.setText("无法打开本地状态库")
             return
         try:
-            self._assignments = store.list_assignments(limit=200)
+            self._assignments = store.list_assignments(limit=None)
         except Exception:  # pylint: disable=broad-except
             self._assignments = []
         finally:
@@ -121,6 +122,7 @@ class DeadlinesDialog(QDialog):
                 else:
                     color = ACCENT
             list_item = QListWidgetItem(text)
+            list_item.setData(Qt.UserRole, item)
             list_item.setToolTip(text)
             list_item.setForeground(_qcolor(color))
             self.list_widget.addItem(list_item)
@@ -138,6 +140,13 @@ class DeadlinesDialog(QDialog):
             if overdue:
                 note += f"（{overdue} 项已过期，红色标注）"
             self.status_label.setText(note)
+
+    def _open_detail(self, item: QListWidgetItem) -> None:
+        assignment = item.data(Qt.UserRole) or {}
+        parent = self.parentWidget()
+        opener = getattr(parent, "_open_assignment_detail", None)
+        if callable(opener):
+            opener(assignment)
 
     def _export_ics(self) -> None:
         if not self._assignments:

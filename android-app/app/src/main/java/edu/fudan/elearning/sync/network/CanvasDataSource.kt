@@ -47,6 +47,56 @@ data class CanvasAssignment(
     val attachments: List<CanvasAttachment> = emptyList(),
     @SerializedName("due_at") val dueAt: String? = null,
     @SerializedName("html_url") val htmlUrl: String? = null,
+    @SerializedName("points_possible") val pointsPossible: Double? = null,
+    @SerializedName("submission_types") val submissionTypes: List<String> = emptyList(),
+    @SerializedName("has_submitted_submissions") val hasSubmittedSubmissions: Boolean = false,
+    @SerializedName("allowed_attempts") val allowedAttempts: Int? = null,
+    @SerializedName("locked_for_user") val lockedForUser: Boolean = false,
+    @SerializedName("lock_explanation") val lockExplanation: String? = null,
+    @SerializedName("unlock_at") val unlockAt: String? = null,
+    @SerializedName("lock_at") val lockAt: String? = null,
+    @SerializedName("quiz_id") val quizId: Long? = null,
+    val submission: CanvasSubmission? = null,
+    @SerializedName("submission_history")
+    val submissionHistory: List<CanvasSubmission> = emptyList(),
+    val rubric: List<CanvasRubricCriterion> = emptyList(),
+)
+
+/** 当前用户的一次作业提交。 */
+data class CanvasSubmission(
+    val id: Long = 0,
+    @SerializedName("workflow_state") val workflowState: String = "",
+    @SerializedName("submitted_at") val submittedAt: String? = null,
+    val score: Double? = null,
+    val grade: String? = null,
+    val attempt: Int? = null,
+    @SerializedName("submission_type") val submissionType: String? = null,
+    val body: String? = null,
+    val url: String? = null,
+    val attachments: List<CanvasAttachment> = emptyList(),
+    @SerializedName("submission_comments") val comments: List<CanvasSubmissionComment> = emptyList(),
+)
+
+data class CanvasSubmissionComment(
+    val id: Long = 0,
+    val comment: String? = null,
+    @SerializedName("author_name") val authorName: String? = null,
+    @SerializedName("created_at") val createdAt: String? = null,
+)
+
+data class CanvasRubricCriterion(
+    val id: String = "",
+    val description: String = "",
+    @SerializedName("long_description") val longDescription: String = "",
+    val points: Double = 0.0,
+    val ratings: List<CanvasRubricRating> = emptyList(),
+)
+
+data class CanvasRubricRating(
+    val id: String = "",
+    val description: String = "",
+    @SerializedName("long_description") val longDescription: String = "",
+    val points: Double = 0.0,
 )
 
 /** Canvas 公告。 */

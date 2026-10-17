@@ -55,8 +55,8 @@ internal fun <T> loadResource(
 @Composable
 internal fun ScreenHeading(title: String, subtitle: String, modifier: Modifier = Modifier) {
     Column(
-        modifier.padding(top = 12.dp, bottom = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp),
+        modifier.padding(top = 8.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(

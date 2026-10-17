@@ -55,6 +55,11 @@ class FileUtilsDisplayTest {
     }
 
     @Test
+    fun cleanCourseName_stripsThreeDigitSectionCode() {
+        assertEquals("新时代实践教育Ⅰ", FileUtils.cleanCourseName("GEIP10004.158 新时代实践教育Ⅰ"))
+    }
+
+    @Test
     fun formatRate_formatsUnits() {
         assertEquals("—", FileUtils.formatRate(0.0))
         assertEquals("512 B/s", FileUtils.formatRate(512.0))

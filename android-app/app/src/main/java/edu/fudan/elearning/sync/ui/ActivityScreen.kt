@@ -1,8 +1,5 @@
 package edu.fudan.elearning.sync.ui
 
-import android.content.Intent
-import android.net.Uri
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.*
@@ -13,7 +10,6 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -57,12 +53,11 @@ internal fun ActivityScreen(viewModel: AppViewModel) {
             assignments
                 .filter { (dueInstant(it.dueAt) ?: Instant.MAX) < now }
                 .sortedByDescending { dueInstant(it.dueAt) }
-                .take(5)
         }
     LazyColumn(
         Modifier.fillMaxSize().testTag("activity-list"),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         item {
             ScreenHeading(
@@ -99,33 +94,50 @@ internal fun ActivityScreen(viewModel: AppViewModel) {
                             SearchResult(change.fileId, change.courseId, change.filename)
                         )
                     },
-                    shape = MaterialTheme.shapes.medium,
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0f),
                 ) {
-                    Column(
-                        Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        StatusBadge(
-                            stringResource(
-                                when (change.change) {
-                                    "new" -> R.string.change_new
-                                    "updated" -> R.string.change_updated
-                                    else -> R.string.change_removed
-                                }
+                    Column {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            StatusBadge(
+                                stringResource(
+                                    when (change.change) {
+                                        "new" -> R.string.change_new
+                                        "updated" -> R.string.change_updated
+                                        else -> R.string.change_removed
+                                    }
+                                )
                             )
-                        )
-                        Text(
-                            change.filename,
-                            style = MaterialTheme.typography.titleSmall,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            "${FileUtils.cleanCourseName(change.courseName)} · ${displayDate(change.occurredAt)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            Column(
+                                Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                Text(
+                                    change.filename,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    FileUtils.cleanCourseName(change.courseName),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Text(
+                                displayDate(change.occurredAt),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        HorizontalDivider(
+                            Modifier.padding(start = 58.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant,
                         )
                     }
                 }
@@ -147,55 +159,61 @@ internal fun ActivityScreen(viewModel: AppViewModel) {
                     )
                 }
             items(upcoming, key = { "next-${it.id}" }) { assignment ->
-                DeadlineCard(assignment, false)
+                DeadlineCard(assignment, false, viewModel)
             }
             if (overdue.isNotEmpty())
                 item { SectionLabel(stringResource(R.string.deadlines_overdue)) }
             items(overdue, key = { "past-${it.id}" }) { assignment ->
-                DeadlineCard(assignment, true)
+                DeadlineCard(assignment, true, viewModel)
             }
         }
     }
 }
 
 @Composable
-private fun DeadlineCard(assignment: Assignment, overdue: Boolean) {
-    val context = LocalContext.current
+private fun DeadlineCard(assignment: Assignment, overdue: Boolean, viewModel: AppViewModel) {
     Surface(
-        shape = MaterialTheme.shapes.medium,
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        Modifier.fillMaxWidth().clickable { viewModel.openAssignment(assignment) },
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0f),
     ) {
-        Column(
-            Modifier.fillMaxWidth().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text(
-                displayDate(assignment.dueAt),
-                style = MaterialTheme.typography.labelLarge,
-                color =
-                    if (overdue) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.primary,
-            )
-            Text(assignment.name, style = MaterialTheme.typography.titleMedium)
-            Text(
-                FileUtils.cleanCourseName(assignment.courseName),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            val uri =
-                remember(assignment.htmlUrl) {
-                    runCatching { Uri.parse(assignment.htmlUrl) }.getOrNull()
+        Column {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    displayDate(assignment.dueAt),
+                    style = MaterialTheme.typography.labelLarge,
+                    color =
+                        if (overdue) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.primary,
+                )
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        assignment.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        FileUtils.cleanCourseName(assignment.courseName),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
-            if (uri?.scheme == "https" && uri.host == "elearning.fudan.edu.cn")
-                TextButton(
-                    onClick = {
-                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
-                    },
-                    modifier = Modifier.align(Alignment.End),
-                ) {
-                    Text(stringResource(R.string.deadline_open))
-                }
+                Text(
+                    "›",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            HorizontalDivider(
+                Modifier.padding(start = 58.dp),
+                color = MaterialTheme.colorScheme.outlineVariant,
+            )
         }
     }
 }
