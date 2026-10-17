@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import edu.fudan.elearning.sync.BuildConfig
 import edu.fudan.elearning.sync.auth.*
 import edu.fudan.elearning.sync.data.*
 import edu.fudan.elearning.sync.network.*
@@ -144,6 +145,8 @@ constructor(
     val taskSubmitError: StateFlow<String?> = _taskSubmitError
     private val _taskSubmitSuccess = MutableStateFlow<String?>(null)
     val taskSubmitSuccess: StateFlow<String?> = _taskSubmitSuccess
+    private val _availableUpdate = MutableStateFlow<AppUpdate?>(null)
+    val availableUpdate: StateFlow<AppUpdate?> = _availableUpdate
     private val _taskSubmissionFiles = MutableStateFlow<List<TaskSubmissionFile>>(emptyList())
     val taskSubmissionFiles: StateFlow<List<TaskSubmissionFile>> = _taskSubmissionFiles
     private val _searchOpen = MutableStateFlow(false)
@@ -171,7 +174,46 @@ constructor(
     private val submissionFileMutex = Mutex()
 
     init {
-        if (autoStart) autoLogin()
+        if (autoStart) {
+            loadPendingUpdate()
+            checkForUpdates(showResult = false)
+            autoLogin()
+        }
+    }
+
+    private fun loadPendingUpdate() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val update =
+                AppUpdate(prefs.pendingUpdateVersion, prefs.pendingUpdateUrl).takeIf {
+                    it.version.isNotBlank() &&
+                        it.url.isNotBlank() &&
+                        UpdateChecker.isNewer(it.version, BuildConfig.VERSION_NAME)
+                }
+            withContext(Dispatchers.Main) { _availableUpdate.value = update }
+        }
+    }
+
+    fun checkForUpdates(showResult: Boolean = true) {
+        viewModelScope.launch {
+            val update = runCatching { UpdateChecker.check() }.getOrNull()
+            if (update != null) {
+                withContext(Dispatchers.IO) {
+                    prefs.pendingUpdateVersion = update.version
+                    prefs.pendingUpdateUrl = update.url
+                }
+                _availableUpdate.value = update
+            } else if (showResult && _availableUpdate.value == null) {
+                showMessage("当前已是最新版本，或暂时无法连接更新服务")
+            }
+        }
+    }
+
+    fun dismissUpdate() {
+        _availableUpdate.value = null
+        viewModelScope.launch(Dispatchers.IO) {
+            prefs.pendingUpdateVersion = ""
+            prefs.pendingUpdateUrl = ""
+        }
     }
 
     private suspend fun loadSettings() =

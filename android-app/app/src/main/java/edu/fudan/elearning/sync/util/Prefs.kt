@@ -52,6 +52,14 @@ class Prefs(context: Context) {
         get() = sp.getLong("last_sync_at", 0)
         set(value) = sp.edit().putLong("last_sync_at", value).apply()
 
+    var pendingUpdateVersion: String
+        get() = sp.getString("pending_update_version", "") ?: ""
+        set(value) = sp.edit().putString("pending_update_version", value).apply()
+
+    var pendingUpdateUrl: String
+        get() = sp.getString("pending_update_url", "") ?: ""
+        set(value) = sp.edit().putString("pending_update_url", value).apply()
+
     /**
      * 某课程**未启用**的内容来源（Canvas 对关闭的标签页返回 404）。
      *

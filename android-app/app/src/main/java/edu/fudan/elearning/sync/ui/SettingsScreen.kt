@@ -217,6 +217,16 @@ internal fun SettingsScreen(viewModel: AppViewModel) {
         item { SectionLabel(stringResource(R.string.settings_about)) }
         item {
             Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0f)) {
+                SettingsRow(
+                    stringResource(R.string.settings_check_update),
+                    stringResource(R.string.settings_check_update_hint),
+                ) {
+                    viewModel.checkForUpdates()
+                }
+            }
+        }
+        item {
+            Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0f)) {
                 Column(
                     Modifier.fillMaxWidth().padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),

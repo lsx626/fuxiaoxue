@@ -136,6 +136,8 @@
     <string name="theme_light">浅色</string>
     <string name="theme_dark">深色</string>
     <string name="settings_about">关于复小学</string>
+    <string name="settings_check_update">检查更新</string>
+    <string name="settings_check_update_hint">启动时检查，并在联网时每六小时自动检查</string>
     <string name="settings_help">帮助</string>
     <string name="settings_user_guide">使用说明</string>
     <string name="settings_user_guide_hint">登录、选择同步范围、阅读和任务提交</string>
