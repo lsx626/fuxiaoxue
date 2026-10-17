@@ -1,4 +1,5 @@
 """通用工具：日志、路径安全处理、格式化、时间解析."""
+
 from __future__ import annotations
 
 import logging
@@ -10,7 +11,10 @@ from datetime import datetime, timezone
 # Windows 文件/目录名非法字符（含控制字符）
 _ILLEGAL_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _RESERVED_NAMES = {
-    "CON", "PRN", "AUX", "NUL",
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
     *(f"COM{i}" for i in range(1, 10)),
     *(f"LPT{i}" for i in range(1, 10)),
 }
@@ -20,8 +24,9 @@ _MAX_NAME_LEN = 200
 _INSTALLER_EXTS = {".exe", ".msi", ".msp", ".apk", ".dmg", ".deb", ".rpm", ".appimage"}
 
 
-def setup_logger(name: str = "fudan_sync", log_file: str | None = None,
-                 level: int = logging.INFO) -> logging.Logger:
+def setup_logger(
+    name: str = "fudan_sync", log_file: str | None = None, level: int = logging.INFO
+) -> logging.Logger:
     """配置并返回全局日志器（控制台 + 可选文件）。"""
     logger = logging.getLogger(name)
     if logger.handlers:  # 防止重复添加
@@ -29,8 +34,9 @@ def setup_logger(name: str = "fudan_sync", log_file: str | None = None,
     logger.setLevel(level)
     logger.propagate = False
 
-    fmt = logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s",
-                            datefmt="%Y-%m-%d %H:%M:%S")
+    fmt = logging.Formatter(
+        "[%(asctime)s] [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
     console = logging.StreamHandler(sys.stdout)
     console.setFormatter(fmt)
     logger.addHandler(console)
@@ -143,15 +149,17 @@ def free_space_gb(path: str) -> float:
     try:
         usage = os.statvfs(path) if hasattr(os, "statvfs") else None
         if usage is not None:
-            return usage.f_bavail * usage.f_frsize / (1024 ** 3)
+            return usage.f_bavail * usage.f_frsize / (1024**3)
     except OSError:
         pass
     # Windows / 无 statvfs
     try:
         import ctypes
+
         free_bytes = ctypes.c_ulonglong(0)
         ctypes.windll.kernel32.GetDiskFreeSpaceExW(
-            ctypes.c_wchar_p(path), None, None, ctypes.pointer(free_bytes))
-        return free_bytes.value / (1024 ** 3)
+            ctypes.c_wchar_p(path), None, None, ctypes.pointer(free_bytes)
+        )
+        return free_bytes.value / (1024**3)
     except Exception:  # pylint: disable=broad-except
         return float("inf")

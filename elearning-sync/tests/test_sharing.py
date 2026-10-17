@@ -1,4 +1,5 @@
 """Desktop file sharing regression tests."""
+
 from __future__ import annotations
 
 import os

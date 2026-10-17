@@ -3,6 +3,7 @@
 
 支持点击通知打开指定文件或目录，所有通知操作均不阻塞 UI 线程。
 """
+
 from __future__ import annotations
 
 import os
@@ -22,6 +23,7 @@ from .icon import app_icon
 _win10toast_available = False
 try:
     from win10toast import ToastNotifier  # type: ignore
+
     _win10toast_available = True
 except ImportError:
     ToastNotifier = None  # type: ignore
@@ -30,6 +32,7 @@ except ImportError:
 _plyer_available = False
 try:
     from plyer import notification as _plyer_notification  # type: ignore
+
     _plyer_available = True
 except ImportError:
     _plyer_notification = None  # type: ignore
@@ -39,6 +42,7 @@ _win32_available = False
 try:
     import win32api  # type: ignore
     import win32con  # type: ignore
+
     _win32_available = True
 except ImportError:
     win32api = None  # type: ignore
@@ -71,8 +75,13 @@ class WindowsNotifier(QObject):
     # ------------------------------------------------------------------
     # 公共 API
     # ------------------------------------------------------------------
-    def notify(self, title: str, message: str, icon_path: Optional[str] = None,
-               open_path: Optional[str] = None) -> None:
+    def notify(
+        self,
+        title: str,
+        message: str,
+        icon_path: Optional[str] = None,
+        open_path: Optional[str] = None,
+    ) -> None:
         """发送桌面通知。
 
         Args:
@@ -87,8 +96,9 @@ class WindowsNotifier(QObject):
     # ------------------------------------------------------------------
     # 内部实现
     # ------------------------------------------------------------------
-    def _do_notify(self, title: str, message: str,
-                   icon_path: Optional[str], open_path: Optional[str]) -> None:
+    def _do_notify(
+        self, title: str, message: str, icon_path: Optional[str], open_path: Optional[str]
+    ) -> None:
         """实际执行通知分发（在事件循环中调用）。"""
         # 后端 1：win10toast —— 支持回调，体验最好
         if self._win10toaster is not None:
@@ -114,17 +124,19 @@ class WindowsNotifier(QObject):
         # 极端情况：啥都没有，静默失败（总不能崩了）
         pass
 
-    def _notify_win10toast(self, title: str, message: str,
-                           icon_path: Optional[str],
-                           open_path: Optional[str]) -> None:
+    def _notify_win10toast(
+        self, title: str, message: str, icon_path: Optional[str], open_path: Optional[str]
+    ) -> None:
         """使用 win10toast 发送 Toast 通知。"""
         icon = icon_path or self._extract_icon_temp()
         callback = None
         if open_path and os.path.exists(open_path):
+
             def _on_click(path=open_path):
                 # 回调在子线程，通过信号回到主线程
                 self.notification_clicked.emit(path)
                 _open_path_in_shell(path)
+
             callback = _on_click
 
         try:
@@ -148,8 +160,7 @@ class WindowsNotifier(QObject):
                     daemon=True,
                 ).start()
 
-    def _notify_plyer(self, title: str, message: str,
-                      icon_path: Optional[str]) -> None:
+    def _notify_plyer(self, title: str, message: str, icon_path: Optional[str]) -> None:
         """使用 plyer 发送通知。"""
         icon = icon_path or self._extract_icon_temp()
         try:
@@ -169,15 +180,16 @@ class WindowsNotifier(QObject):
                     daemon=True,
                 ).start()
 
-    def _notify_win32(self, title: str, message: str,
-                      open_path: Optional[str]) -> None:
+    def _notify_win32(self, title: str, message: str, open_path: Optional[str]) -> None:
         """使用 win32api.MessageBox 兜底（在子线程中调用）。
 
         这是最朴素的模态弹窗，用户点击"确定"后可选打开关联路径。
         """
         try:
             result = win32api.MessageBox(
-                0, message, title,
+                0,
+                message,
+                title,
                 win32con.MB_OK | win32con.MB_ICONINFORMATION,
             )
             if result == 1 and open_path and os.path.exists(open_path):
@@ -195,6 +207,7 @@ class WindowsNotifier(QObject):
         """
         try:
             import tempfile
+
             icon = app_icon()
             pixmap = icon.pixmap(64, 64)
             tmp_path = os.path.join(tempfile.gettempdir(), "fuxiaoxue_notify.ico")

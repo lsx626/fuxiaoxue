@@ -1,4 +1,13 @@
 """复小学 - 复旦大学 eLearning (Canvas LMS) 课程文件同步工具."""
 
-__version__ = "1.3.0"
-__all__ = ["config", "auth", "canvas_api", "crawler", "downloader", "state", "sync_engine", "daemon"]
+__version__ = "1.3.1"
+__all__ = [
+    "config",
+    "auth",
+    "canvas_api",
+    "crawler",
+    "downloader",
+    "state",
+    "sync_engine",
+    "daemon",
+]

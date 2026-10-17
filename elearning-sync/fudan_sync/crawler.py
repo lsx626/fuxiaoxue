@@ -9,6 +9,7 @@
 6. 公告(Announcement)的附件与正文引用
 7. 课程大纲(Syllabus)中引用的文件
 """
+
 from __future__ import annotations
 
 import re
@@ -30,19 +31,19 @@ FILE_UUID_RE = re.compile(r"/files/(\d+)/preview")
 class RemoteFile:
     file_id: int
     course_id: int
-    filename: str            # 优先 display_name，回退 filename
+    filename: str  # 优先 display_name，回退 filename
     size: int = 0
     content_type: str = ""
     folder_id: Optional[int] = None
-    folder_path: str = ""    # 相对课程根的路径（如 "课件/第1周"）
+    folder_path: str = ""  # 相对课程根的路径（如 "课件/第1周"）
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     modified_at: Optional[str] = None
     url: str = ""
     locked_for_user: bool = False
     hidden: bool = False
-    source: str = "files"    # 发现来源：files | module | page | assignment | announcement | syllabus
-    context: str = ""        # 来源描述，如 "模块: 第1周 / 页面: 课件1"
+    source: str = "files"  # 发现来源：files | module | page | assignment | announcement | syllabus
+    context: str = ""  # 来源描述，如 "模块: 第1周 / 页面: 课件1"
 
     @property
     def key(self) -> str:
@@ -52,12 +53,13 @@ class RemoteFile:
 @dataclass
 class CoursePage:
     """课程页面/作业/公告的正文归档信息。"""
+
     course_id: int
-    kind: str                # page | assignment | announcement | syllabus
+    kind: str  # page | assignment | announcement | syllabus
     title: str
     url: str = ""
     body: str = ""
-    page_url: str = ""       # Canvas page 的 url slug
+    page_url: str = ""  # Canvas page 的 url slug
 
 
 @dataclass
@@ -67,10 +69,11 @@ class AssignmentInfo:
     Python 端与 Android 端的 `CanvasAssignment` 保持同一字段口径
     （id/name/due_at/html_url），两端待办视图共用同一套数据语义。
     """
+
     assignment_id: int
     course_id: int
     name: str
-    due_at: str = ""         # Canvas 返回的 ISO8601，可能为空（无截止时间）
+    due_at: str = ""  # Canvas 返回的 ISO8601，可能为空（无截止时间）
     html_url: str = ""
 
 
@@ -135,8 +138,9 @@ class Crawler:
         folder_name: Dict[int, str] = {}
         parent: Dict[int, Optional[int]] = {}
         try:
-            for folder in self.api.iter_pages(f"/courses/{course_id}/folders",
-                                              params={"per_page": 100}):
+            for folder in self.api.iter_pages(
+                f"/courses/{course_id}/folders", params={"per_page": 100}
+            ):
                 fid = folder.get("id")
                 if fid is None:
                     continue
@@ -162,22 +166,31 @@ class Crawler:
         return {fid: resolve(fid) for fid in folder_name}
 
     # ------------------------------------------------------------------
-    def _crawl_course_files(self, course_id: int, folder_paths: Dict[int, str],
-                            result: CrawlResult) -> None:
+    def _crawl_course_files(
+        self, course_id: int, folder_paths: Dict[int, str], result: CrawlResult
+    ) -> None:
         try:
-            for item in self.api.iter_pages(f"/courses/{course_id}/files",
-                                            params={"per_page": 100}):
+            for item in self.api.iter_pages(
+                f"/courses/{course_id}/files", params={"per_page": 100}
+            ):
                 self._add_file_entry(item, course_id, folder_paths, result, "files")
         except Exception as exc:  # pylint: disable=broad-except
-            self._log("warning", "课程 %d 文件列表获取失败: %s（本次不判定远端删除）",
-                      course_id, exc)
+            self._log(
+                "warning", "课程 %d 文件列表获取失败: %s（本次不判定远端删除）", course_id, exc
+            )
             result.errors.append(f"course_files: {exc}")
             return
         result.files_listed_ok = True
 
-    def _add_file_entry(self, item: Dict, course_id: int,
-                        folder_paths: Dict[int, str], result: CrawlResult,
-                        source: str, context: str = "") -> None:
+    def _add_file_entry(
+        self,
+        item: Dict,
+        course_id: int,
+        folder_paths: Dict[int, str],
+        result: CrawlResult,
+        source: str,
+        context: str = "",
+    ) -> None:
         file_id = item.get("id")
         if file_id is None:
             return
@@ -204,14 +217,18 @@ class Crawler:
     def _crawl_modules(self, course_id: int, result: CrawlResult) -> None:
         """模块中的 File 类型条目。"""
         try:
-            for module in self.api.iter_pages(f"/courses/{course_id}/modules",
-                                              params={"per_page": 100, "include[]": "items"}):
+            for module in self.api.iter_pages(
+                f"/courses/{course_id}/modules", params={"per_page": 100, "include[]": "items"}
+            ):
                 module_name = module.get("name") or ""
                 items = module.get("items") or []
                 if not items and module.get("items_count"):
-                    items = list(self.api.iter_pages(
-                        f"/courses/{course_id}/modules/{module['id']}/items",
-                        params={"per_page": 100}))
+                    items = list(
+                        self.api.iter_pages(
+                            f"/courses/{course_id}/modules/{module['id']}/items",
+                            params={"per_page": 100},
+                        )
+                    )
                 for item in items:
                     if (item.get("type") or "").lower() != "file":
                         continue
@@ -224,8 +241,9 @@ class Crawler:
             self._log("warning", "课程 %d 模块获取失败: %s", course_id, exc)
             result.errors.append(f"modules: {exc}")
 
-    def _fetch_and_add(self, course_id: int, file_id: int, result: CrawlResult,
-                       source: str, context: str) -> None:
+    def _fetch_and_add(
+        self, course_id: int, file_id: int, result: CrawlResult, source: str, context: str
+    ) -> None:
         """对引用型文件，单独拉取元数据后加入结果（会自动去重）。"""
         if file_id in result.files:
             existing = result.files[file_id]
@@ -242,8 +260,9 @@ class Crawler:
             self._add_file_entry(item, course_id, {}, result, source, context)
 
     # ------------------------------------------------------------------
-    def _crawl_referenced_files(self, course_id: int, result: CrawlResult,
-                                collect_pages: bool) -> None:
+    def _crawl_referenced_files(
+        self, course_id: int, result: CrawlResult, collect_pages: bool
+    ) -> None:
         """页面/作业/公告/大纲：提取正文中的文件链接，并可选归档正文 HTML。"""
         self._crawl_pages(course_id, result, collect_pages)
         self._crawl_assignments(course_id, result, collect_pages)
@@ -257,15 +276,17 @@ class Crawler:
         ids |= {int(m) for m in FILE_UUID_RE.findall(html)}
         return [i for i in ids if i > 0]
 
-    def _add_referenced(self, course_id: int, html: str, result: CrawlResult,
-                        source: str, context: str) -> None:
+    def _add_referenced(
+        self, course_id: int, html: str, result: CrawlResult, source: str, context: str
+    ) -> None:
         for file_id in self._collect_file_links(html):
             self._fetch_and_add(course_id, file_id, result, source, context)
 
     def _crawl_pages(self, course_id: int, result: CrawlResult, collect: bool) -> None:
         try:
-            for page in self.api.iter_pages(f"/courses/{course_id}/pages",
-                                            params={"per_page": 100}):
+            for page in self.api.iter_pages(
+                f"/courses/{course_id}/pages", params={"per_page": 100}
+            ):
                 page_url = page.get("url") or page.get("page_url") or ""
                 title = page.get("title") or page_url or "untitled"
                 body = page.get("body") or ""
@@ -277,37 +298,53 @@ class Crawler:
                         pass
                 self._add_referenced(course_id, body, result, "page", f"页面: {title}")
                 if collect and body:
-                    result.pages.append(CoursePage(
-                        course_id, "page", title, url=page_url, body=body, page_url=page_url))
+                    result.pages.append(
+                        CoursePage(
+                            course_id, "page", title, url=page_url, body=body, page_url=page_url
+                        )
+                    )
         except Exception as exc:  # pylint: disable=broad-except
             self._log("warning", "课程 %d 页面列表获取失败: %s", course_id, exc)
             result.errors.append(f"pages: {exc}")
 
     def _crawl_assignments(self, course_id: int, result: CrawlResult, collect: bool) -> None:
         try:
-            for assignment in self.api.iter_pages(f"/courses/{course_id}/assignments",
-                                                  params={"per_page": 100}):
+            for assignment in self.api.iter_pages(
+                f"/courses/{course_id}/assignments", params={"per_page": 100}
+            ):
                 title = assignment.get("name") or "untitled"
                 body = assignment.get("description") or ""
                 self._add_referenced(course_id, body, result, "assignment", f"作业: {title}")
                 # 截止日期（可能为空）：这是待办视图的唯一权威来源，之前一直被丢弃
-                result.assignments.append(AssignmentInfo(
-                    assignment_id=int(assignment.get("id") or 0),
-                    course_id=course_id, name=title,
-                    due_at=str(assignment.get("due_at") or ""),
-                    html_url=str(assignment.get("html_url") or "")))
+                result.assignments.append(
+                    AssignmentInfo(
+                        assignment_id=int(assignment.get("id") or 0),
+                        course_id=course_id,
+                        name=title,
+                        due_at=str(assignment.get("due_at") or ""),
+                        html_url=str(assignment.get("html_url") or ""),
+                    )
+                )
                 if collect and body:
-                    result.pages.append(CoursePage(
-                        course_id, "assignment", title,
-                        url=str(assignment.get("html_url") or ""), body=body))
+                    result.pages.append(
+                        CoursePage(
+                            course_id,
+                            "assignment",
+                            title,
+                            url=str(assignment.get("html_url") or ""),
+                            body=body,
+                        )
+                    )
         except Exception as exc:  # pylint: disable=broad-except
             self._log("warning", "课程 %d 作业列表获取失败: %s", course_id, exc)
             result.errors.append(f"assignments: {exc}")
 
     def _crawl_announcements(self, course_id: int, result: CrawlResult, collect: bool) -> None:
         try:
-            for ann in self.api.iter_pages(f"/courses/{course_id}/announcements",
-                                           params={"per_page": 100, "include[]": "attachments"}):
+            for ann in self.api.iter_pages(
+                f"/courses/{course_id}/announcements",
+                params={"per_page": 100, "include[]": "attachments"},
+            ):
                 title = ann.get("title") or "untitled"
                 body = ann.get("message") or ann.get("body") or ""
                 self._add_referenced(course_id, body, result, "announcement", f"公告: {title}")
@@ -315,12 +352,18 @@ class Crawler:
                 for attachment in ann.get("attachments") or []:
                     if isinstance(attachment, dict) and attachment.get("id"):
                         self._add_file_entry(
-                            attachment, course_id, {}, result, "announcement",
-                            f"公告附件: {title}")
+                            attachment, course_id, {}, result, "announcement", f"公告附件: {title}"
+                        )
                 if collect and body:
-                    result.pages.append(CoursePage(
-                        course_id, "announcement", title,
-                        url=str(ann.get("html_url") or ""), body=body))
+                    result.pages.append(
+                        CoursePage(
+                            course_id,
+                            "announcement",
+                            title,
+                            url=str(ann.get("html_url") or ""),
+                            body=body,
+                        )
+                    )
         except Exception as exc:  # pylint: disable=broad-except
             self._log("warning", "课程 %d 公告列表获取失败: %s", course_id, exc)
             result.errors.append(f"announcements: {exc}")
@@ -332,7 +375,6 @@ class Crawler:
             if body:
                 self._add_referenced(course_id, body, result, "syllabus", "课程大纲")
                 if collect:
-                    result.pages.append(CoursePage(
-                        course_id, "syllabus", "课程大纲", body=body))
+                    result.pages.append(CoursePage(course_id, "syllabus", "课程大纲", body=body))
         except Exception as exc:  # pylint: disable=broad-except
             self._log("debug", "课程 %d 大纲获取失败: %s", course_id, exc)

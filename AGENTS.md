@@ -133,6 +133,16 @@
 
 Android 顶栏/正文使用主题色，截止日期随列表滚动；截止项与文件阅读进度分行避免窄屏挤压，待下载不再标成同步中；只对已下载文件提供分享入口。文件列表区分加载中/空数据/加载失败，失败可重试且取消协程照常传播。展示层筛选、排序、进度文案抽到 `ui/LibraryPresentation.kt` 并用离线测试覆盖。双端百分比按显示页码计算（最后一页 100%），位置 0 视为未读、媒体按秒计时的语义保持。
 
+### v1.3.1：双端视觉系统、删除语义与代码整理（2026-10-17）
+
+远端文件删除不再保留 `remote_missing` 状态行：只有课程 files 主列表完整成功时，双端才删除应用管理范围内的本地副本与 `.part`，并原子清理文件行、搜索索引、原文缓存和阅读进度；磁盘删除失败的记录保留供下轮重试，历史越界路径只删记录不碰磁盘。旧 `sync.prune` 配置仅为兼容读取，不再控制行为，设置页不再展示开关。
+
+双端视觉统一为“书页蓝”：Android 重绘应用图标、品牌标记、导航图标、明暗色板、指标卡和课程卡；桌面重绘运行时/安装器图标与线性操作图标，改为深蓝品牌栏、强调线指标卡及统一的表格和控件状态。视觉改动必须继续用合成数据截图检查手机窄屏、平板与桌面 880×620。
+
+全仓库 Python 使用根目录 `pyproject.toml` 的 Ruff 规则统一格式与基础静态检查，Android 源码与 Gradle Kotlin DSL 由 Spotless + ktfmt 统一格式，通用换行、缩进和尾随空格规则在 `.editorconfig`。Android 同步统计与删除路径使用当前行为命名，不再把实际删除计数称为 `remoteMissing`；`AppViewModel` 中并列副作用必须分行表达，避免用分号压缩控制流。
+
+当前工作区验证：桌面 **157 passed**；Android **136 JVM passed**、API 36 插桩 **66 passed / 0 skipped**，`spotlessCheck`、`lintDebug`、`assembleDebug`、`assembleDebugAndroidTest` 通过。Android 构建必须继续从 `C:\fxs\android-app` 的 ASCII 入口执行；中文路径与该入口交替编译会污染 Kotlin 增量缓存。
+
 **设备回归发现的既有 P0**：v1.2.2 的 `Repo.upsertFile` 开始写 `files.error`，但 `DatabaseHelper.onCreate/onUpgrade` 一直未创建这一列；v1.2.2/v1.2.3 的文件写入会抛 `no column named error`，此前 JVM/lint 无法检出。现全新建库补列，并将 schema 从 **v4 升到 v5**，旧库只 `ALTER TABLE ADD COLUMN`；加列异常不再吞掉，以便 SQLiteOpenHelper 回滚升级事务，避免版本号已升级却缺列。`DatabaseMigrationInstrumentedTest` 新增 v4→v5 保留路径/状态/阅读进度及失败原因读写的回归。不得用清库/卸载来绕过此问题。
 
 验证（2026-10-16）：桌面完整 **157 passed**，新增页码百分比回归，扩展搜索 UI 冒烟覆盖组合筛选、刷新保留选择、可见按钮与 Enter 打开；880×620 与 1200×820 在 125%/150% 缩放下用合成数据截图检查通过。Windows offscreen 不枚举系统字体，测试显式加载系统字体，避免把方框字截图当成排版验收。Android **114 JVM passed**，`lintDebug`、`assembleDebug`、`assembleDebugAndroidTest` 通过；API 36 模拟器插桩 **39 passed / 2 skipped（41 项）**，跳过项是未提供 `legacy.doc` 的两项 Office 夹具测试，并非本轮筛选/迁移用例。另跑 360dp / 深色 / 字体 1.15 倍的四页截图冒烟通过，随后恢复模拟器显示设置并关闭本轮启动的模拟器。桌面媒体退出测试曾在两端并行验收时发生一次 30s 超时，停止模拟器后串行完整重跑 157 项全绿，未改媒体代码。
@@ -572,7 +582,7 @@ PC 和 Android 必须保持同一协议契约：
 
 文件以 Canvas `file_id` 去重。第一次发现保留权威路径，后续来源只追加 source/context。引用型文件通过 `/courses/:id/files/:file_id` 补完整元数据。
 
-删除安全闸门是硬性不变量：只有课程 files 主列表完整成功后，`CrawlResult.files_listed_ok` 才能为真；只有它为真，才允许把本轮未出现的 ID 判定为远端删除。网络失败、权限错误、解析失败或结果不可信时，绝不能标记 missing 或删除本地文件。
+删除安全闸门是硬性不变量：只有课程 files 主列表完整成功后，`CrawlResult.files_listed_ok` 才能为真；只有它为真，才允许把本轮未出现的 ID 判定为远端删除，并清理应用管理范围内的本地副本、断点和关联记录。网络失败、权限错误、解析失败或结果不可信时，绝不能删除本地文件或记录。
 
 页面归档写入 `<课程>/_pages/`，并将相对链接改写为平台绝对 URL。当前并未下载所有外链资源，因此这是“正文归档”，不是完全离线镜像；文案必须准确。
 
@@ -605,10 +615,7 @@ Downloader 只处理同步引擎已经判定需要下载的任务，不能再次
 
 `v1.0.5` 起，源码会逐组件清洗 `folder_path` 和本地文件名，以 `realpath/commonpath` 验证课程根目录边界，并结合数据库历史占用、磁盘已有文件与 `.part` 文件稳定避让同名。状态库的 `filename/display_name` 有意保留 Canvas 远端原名，安全后的实际名称只用于 `DownloadTask`，权威落盘位置记录在 `local_path`；不要把本地安全名写回远端 filename，否则后续会误判远端重命名。
 
-远端删除语义：
-
-- `prune=false`：仅把数据库状态改为 `remote_missing`，保留本地文件。
-- `prune=true`：只有通过 `files_listed_ok` 安全闸门后，且 `local_path` 经真实路径检查仍位于当前课程目录内，才允许删除对应本地文件。旧数据库中的越界路径只标记 missing，不删除目标。
+远端删除语义：通过 `files_listed_ok` 安全闸门后，且 `local_path` 经真实路径检查仍位于当前课程目录内，删除对应本地文件与断点，再清理数据库关联。磁盘删除失败时保留记录供下轮重试；旧数据库中的越界路径只移除记录，不删除目标。`sync.prune` 只作为旧配置兼容字段读取，不再改变行为。
 - 存储管理器的“用户主动删除”会同时删文件和数据库行，下次同步会重新下载；UI 应明确这一结果。
 
 ## 13. 下载算法
@@ -636,7 +643,7 @@ Downloader 只处理同步引擎已经判定需要下载的任务，不能再次
 
 - WAL 模式，`synchronous=NORMAL`。
 - 表：`courses`、`files`、`sync_runs`、`kv`，外加全文索引虚拟表 `files_fts`（v1.1.0 起）。
-- 文件状态：`pending`、`downloaded`、`failed`、`remote_missing`。
+- 文件状态：`pending`、`downloaded`、`failed`、`locked`；升级前遗留的 `remote_missing` 行在下一次完整课程同步时清理。
 - 每个线程独立 SQLite connection，连接和 cursor 绝不能跨线程传递。
 - 类级写锁串行化写事务。
 - `close()` 只关闭调用线程自己的连接。

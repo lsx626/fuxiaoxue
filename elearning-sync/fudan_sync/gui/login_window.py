@@ -1,10 +1,19 @@
 """首次登录引导窗：只需输入 UIS 账号密码。"""
+
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import (QCheckBox, QDialog, QFormLayout, QFrame, QLabel,
-                               QLineEdit, QPushButton, QVBoxLayout)
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QDialog,
+    QFormLayout,
+    QFrame,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QVBoxLayout,
+)
 
 from .icon import app_icon
 from .styles import ACCENT, DANGER, TEXT_SECONDARY
@@ -31,8 +40,7 @@ class LoginWindow(QDialog):
 
     def _center(self) -> None:
         screen = QGuiApplication.primaryScreen().availableGeometry()
-        self.move(screen.center().x() - self.width() // 2,
-                  screen.center().y() - self.height() // 2)
+        self.move(screen.center().x() - self.width() // 2, screen.center().y() - self.height() // 2)
 
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
@@ -158,8 +166,9 @@ class LoginWindow(QDialog):
         self.error_label.setText("")
         self._toggle_busy(True)
 
-        self.worker = LoginWorker(self.cfg, username, password,
-                                  remember=self.remember_check.isChecked())
+        self.worker = LoginWorker(
+            self.cfg, username, password, remember=self.remember_check.isChecked()
+        )
         self.worker.succeeded.connect(self._on_success)
         self.worker.failed.connect(self._on_failure)
         self.worker.start()

@@ -4,6 +4,18 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.diffplug.spotless")
+}
+
+spotless {
+    kotlin {
+        target("src/**/*.kt")
+        ktfmt("0.54").kotlinlangStyle()
+    }
+    kotlinGradle {
+        target("*.gradle.kts")
+        ktfmt("0.54").kotlinlangStyle()
+    }
 }
 
 android {
@@ -14,8 +26,8 @@ android {
         applicationId = "edu.fudan.elearning.sync"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20
-        versionName = "1.3.0"
+        versionCode = 21
+        versionName = "1.3.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // POI 方法数较多，需要 multidex
         multiDexEnabled = true
@@ -25,10 +37,14 @@ android {
         create("release") {
             // 签名密钥与密码只放在 local.properties（不入库），克隆后若无配置则
             // 自动回退 debug 签名，保证仓库可独立构建。
-            val props = Properties().apply {
-                rootProject.file("local.properties").takeIf { it.exists() }
-                    ?.inputStream()?.use { load(it) }
-            }
+            val props =
+                Properties().apply {
+                    rootProject
+                        .file("local.properties")
+                        .takeIf { it.exists() }
+                        ?.inputStream()
+                        ?.use { load(it) }
+                }
             val store = file(props.getProperty("fudanSign.storeFile") ?: "../release.keystore")
             if (store.exists()) {
                 storeFile = store
@@ -49,7 +65,7 @@ android {
                 else signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
+                "proguard-rules.pro",
             )
         }
     }
@@ -57,9 +73,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    kotlinOptions { jvmTarget = "17" }
     buildFeatures {
         buildConfig = true
         compose = true
@@ -91,27 +105,30 @@ android {
 // ============================================================================
 // 编译期符号解析：Kotlin（compileDebugKotlin）先于变体 javac 执行，拿不到 javac
 // 产出的桩类，因此先用独立任务把 java.awt / javax.xml.* 编译成 jar。
-val compileJavaStubs by tasks.registering(JavaCompile::class) {
-    // 本任务没有 classpath 且 --limit-modules java.base，javax.xml.namespace 必须
-    // 由同源集的桩源码提供（QName / NamespaceContext）；这两个类运行期由
-    // android.jar 提供，打 jar 时 exclude，不会重复打包。
-    source("src/awtstub/java")
-    classpath = files()
-    sourceCompatibility = "17"
-    targetCompatibility = "17"
-    options.compilerArgs = listOf("--limit-modules", "java.base", "-encoding", "UTF-8")
-    destinationDirectory.set(layout.buildDirectory.dir("stubs/classes"))
-}
+val compileJavaStubs by
+    tasks.registering(JavaCompile::class) {
+        // 本任务没有 classpath 且 --limit-modules java.base，javax.xml.namespace 必须
+        // 由同源集的桩源码提供（QName / NamespaceContext）；这两个类运行期由
+        // android.jar 提供，打 jar 时 exclude，不会重复打包。
+        source("src/awtstub/java")
+        classpath = files()
+        sourceCompatibility = "17"
+        targetCompatibility = "17"
+        options.compilerArgs = listOf("--limit-modules", "java.base", "-encoding", "UTF-8")
+        destinationDirectory.set(layout.buildDirectory.dir("stubs/classes"))
+    }
 
 // 打成 jar：kotlinc 不接受目录形式的 java.* 桩类，但接受 jar 形式。该 jar 以
 // implementation 引入，既提供编译期符号，也进入 APK 供运行期加载。
-val javaStubsJar by tasks.registering(Jar::class) {
-    dependsOn(compileJavaStubs)
-    archiveFileName.set("java-platform-stubs.jar")
-    from(compileJavaStubs.map { it.destinationDirectory })
-    // android.jar 已提供 javax.xml.namespace，无需打入本 jar。
-    exclude("javax/xml/namespace/**")
-}
+val javaStubsJar by
+    tasks.registering(Jar::class) {
+        dependsOn(compileJavaStubs)
+        archiveFileName.set("java-platform-stubs.jar")
+        from(compileJavaStubs.map { it.destinationDirectory })
+        // android.jar 已提供 javax.xml.namespace，无需打入本 jar。
+        exclude("javax/xml/namespace/**")
+    }
+
 dependencies {
     implementation(files(javaStubsJar))
     implementation("androidx.core:core-ktx:1.15.0")

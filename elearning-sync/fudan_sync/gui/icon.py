@@ -1,83 +1,78 @@
-"""用 QPainter 现场绘制应用图标（靛蓝圆角方块 + 白色学士帽），不依赖外部资源。
+"""用 QPainter 绘制统一的品牌图标与线性操作图标。"""
 
-学士帽是"学习/课堂"的通用符号，契合"复小学"的定位；
-配色与 styles.py 及 Android 端 Theme.kt 保持一致。
-"""
 from __future__ import annotations
 
-import math
-
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import (QBrush, QColor, QIcon, QImage, QLinearGradient,
-                           QPainter, QPen, QPixmap, QPolygonF, QRadialGradient)
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QIcon,
+    QImage,
+    QLinearGradient,
+    QPainter,
+    QPen,
+    QPixmap,
+    QPolygonF,
+    QRadialGradient,
+)
 from PySide6.QtWidgets import QApplication
 
 # 与 styles.py / Android Theme.kt 共用的品牌色
-ICON_COLOR_TOP = "#6366F1"
-ICON_COLOR_MID = "#4338CA"
-ICON_COLOR_BOTTOM = "#312E81"
+ICON_COLOR_TOP = "#2457D6"
+ICON_COLOR_MID = "#1948BD"
+ICON_COLOR_BOTTOM = "#102A56"
 
 
 def _paint_cap(painter: QPainter, size: float) -> None:
-    """在已铺好底色的画布中央绘制白色学士帽。"""
-    cx = size / 2
-    cy = size * 0.555  # 帽子整体略偏下，视觉上更居中
-    board_y = cy - size * 0.085
-    bw = size * 0.30   # 帽顶板的半宽
-    bh = size * 0.125  # 帽顶板的半高（透视压扁）
-
+    """绘制向中央折叠的双页书标，避免常见学士帽模板感。"""
     painter.save()
     painter.setRenderHint(QPainter.Antialiasing, True)
     painter.setPen(Qt.NoPen)
-
-    # 帽顶板（菱形）
-    board = QPolygonF([
-        QPointF(cx, board_y - bh),
-        QPointF(cx + bw, board_y),
-        QPointF(cx, board_y + bh),
-        QPointF(cx - bw, board_y),
-    ])
+    left = QPolygonF(
+        [
+            QPointF(size * 0.18, size * 0.30),
+            QPointF(size * 0.45, size * 0.38),
+            QPointF(size * 0.45, size * 0.75),
+            QPointF(size * 0.18, size * 0.66),
+        ]
+    )
+    right = QPolygonF(
+        [
+            QPointF(size * 0.82, size * 0.30),
+            QPointF(size * 0.55, size * 0.38),
+            QPointF(size * 0.55, size * 0.75),
+            QPointF(size * 0.82, size * 0.66),
+        ]
+    )
+    spine = QPolygonF(
+        [
+            QPointF(size * 0.45, size * 0.38),
+            QPointF(size * 0.50, size * 0.43),
+            QPointF(size * 0.55, size * 0.38),
+            QPointF(size * 0.55, size * 0.75),
+            QPointF(size * 0.50, size * 0.80),
+            QPointF(size * 0.45, size * 0.75),
+        ]
+    )
     painter.setBrush(QBrush(QColor("#FFFFFF")))
-    painter.drawPolygon(board)
-
-    # 帽身（梯形）：用淡靛蓝与白色形成层次
-    band_top = board_y + bh * 0.88
-    band_bottom = band_top + size * 0.135
-    half_top = size * 0.165
-    half_bottom = size * 0.125
-    band = QPolygonF([
-        QPointF(cx - half_top, band_top),
-        QPointF(cx + half_top, band_top),
-        QPointF(cx + half_bottom, band_bottom),
-        QPointF(cx - half_bottom, band_bottom),
-    ])
-    painter.setBrush(QBrush(QColor("#DDE2F9")))
-    painter.drawPolygon(band)
-
-    # 帽顶板与帽身之间加一道投影缝，增强立体感
-    painter.setPen(QPen(QColor("#C7CDF3"), max(1.5, size * 0.012)))
-    painter.drawLine(QPointF(cx - half_top * 0.98, band_top),
-                     QPointF(cx + half_top * 0.98, band_top))
-
-    # 流苏：从帽右侧垂下，末端一个绒球
-    cord_x = cx + bw
-    cord_w = max(2.0, size * 0.045)
-    cord_pen = QPen(QColor("#FFFFFF"), cord_w)
-    cord_pen.setCapStyle(Qt.RoundCap)
-    painter.setPen(cord_pen)
-    painter.drawLine(QPointF(cord_x, board_y + size * 0.005),
-                     QPointF(cord_x, band_bottom + size * 0.015))
-    knot_y = band_bottom + size * 0.045
+    painter.drawPolygon(left)
+    painter.setBrush(QBrush(QColor("#D8F2EF")))
+    painter.drawPolygon(right)
     painter.setBrush(QBrush(QColor("#FFFFFF")))
-    painter.setPen(Qt.NoPen)
-    painter.drawEllipse(QPointF(cord_x, knot_y), size * 0.03, size * 0.03)
+    painter.drawPolygon(spine)
+    painter.setPen(QPen(QColor("#86D9D3"), max(1.2, size * 0.025), Qt.SolidLine, Qt.RoundCap))
+    painter.drawLine(QPointF(size * 0.25, size * 0.47), QPointF(size * 0.38, size * 0.51))
+    painter.drawLine(QPointF(size * 0.62, size * 0.51), QPointF(size * 0.75, size * 0.47))
     painter.restore()
 
 
 def render_pixmap(size: int, device_pixel_ratio: float = 1.0) -> QPixmap:
     """绘制指定尺寸的应用图标位图。"""
-    image = QImage(int(size * device_pixel_ratio), int(size * device_pixel_ratio),
-                   QImage.Format_ARGB32_Premultiplied)
+    image = QImage(
+        int(size * device_pixel_ratio),
+        int(size * device_pixel_ratio),
+        QImage.Format_ARGB32_Premultiplied,
+    )
     image.setDevicePixelRatio(device_pixel_ratio)
     image.fill(Qt.transparent)
 
@@ -116,3 +111,50 @@ def app_icon() -> QIcon:
     for size in (16, 24, 32, 48, 64, 128, 256):
         icon.addPixmap(render_pixmap(size, dpr))
     return icon
+
+
+def line_icon(name: str, color: str = "#5E6878", size: int = 20) -> QIcon:
+    """绘制桌面端统一的 2px 圆角线性图标。"""
+    image = QImage(size, size, QImage.Format_ARGB32_Premultiplied)
+    image.fill(Qt.transparent)
+    p = QPainter(image)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    pen = QPen(QColor(color), 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+    p.setPen(pen)
+    p.setBrush(Qt.NoBrush)
+    s = float(size)
+    if name == "search":
+        p.drawEllipse(QRectF(s * 0.18, s * 0.18, s * 0.48, s * 0.48))
+        p.drawLine(QPointF(s * 0.61, s * 0.61), QPointF(s * 0.84, s * 0.84))
+    elif name == "calendar":
+        p.drawRoundedRect(QRectF(s * 0.15, s * 0.22, s * 0.70, s * 0.63), 2, 2)
+        p.drawLine(QPointF(s * 0.15, s * 0.38), QPointF(s * 0.85, s * 0.38))
+        p.drawLine(QPointF(s * 0.32, s * 0.12), QPointF(s * 0.32, s * 0.29))
+        p.drawLine(QPointF(s * 0.68, s * 0.12), QPointF(s * 0.68, s * 0.29))
+    elif name == "settings":
+        p.drawEllipse(QRectF(s * 0.22, s * 0.22, s * 0.56, s * 0.56))
+        p.drawEllipse(QRectF(s * 0.41, s * 0.41, s * 0.18, s * 0.18))
+    elif name == "more":
+        p.setBrush(QBrush(QColor(color)))
+        [p.drawEllipse(QPointF(s * x, s * 0.5), 1.5, 1.5) for x in (0.25, 0.5, 0.75)]
+    elif name == "sync":
+        p.drawArc(QRectF(s * 0.18, s * 0.18, s * 0.64, s * 0.64), 30 * 16, 250 * 16)
+        p.drawLine(QPointF(s * 0.72, s * 0.17), QPointF(s * 0.82, s * 0.35))
+        p.drawLine(QPointF(s * 0.72, s * 0.17), QPointF(s * 0.55, s * 0.22))
+    elif name == "folder":
+        p.drawRoundedRect(QRectF(s * 0.12, s * 0.28, s * 0.76, s * 0.55), 2, 2)
+        p.drawLine(QPointF(s * 0.12, s * 0.36), QPointF(s * 0.88, s * 0.36))
+        p.drawLine(QPointF(s * 0.18, s * 0.28), QPointF(s * 0.40, s * 0.28))
+    elif name == "play":
+        p.setBrush(QBrush(QColor(color)))
+        p.drawPolygon(
+            QPolygonF(
+                [
+                    QPointF(s * 0.32, s * 0.22),
+                    QPointF(s * 0.78, s * 0.5),
+                    QPointF(s * 0.32, s * 0.78),
+                ]
+            )
+        )
+    p.end()
+    return QIcon(QPixmap.fromImage(image))

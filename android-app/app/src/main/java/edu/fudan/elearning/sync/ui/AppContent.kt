@@ -31,10 +31,15 @@ fun AppContent(viewModel: AppViewModel, requestNotifications: () -> Unit = {}) {
         LaunchedEffect(viewModel) { viewModel.messages.collect { snackbars.showSnackbar(it) } }
         LaunchedEffect(login is LoginState.LoggedIn) {
             if (login is LoginState.LoggedIn) {
-                val ask = withContext(Dispatchers.IO) {
-                    val prefs = Prefs(context)
-                    if (prefs.notificationPrompted) false else { prefs.notificationPrompted = true; true }
-                }
+                val ask =
+                    withContext(Dispatchers.IO) {
+                        val prefs = Prefs(context)
+                        if (prefs.notificationPrompted) false
+                        else {
+                            prefs.notificationPrompted = true
+                            true
+                        }
+                    }
                 if (ask) requestNotifications()
             }
         }
@@ -43,23 +48,51 @@ fun AppContent(viewModel: AppViewModel, requestNotifications: () -> Unit = {}) {
         Box(Modifier.fillMaxSize()) {
             val target = preview
             when {
-                target != null -> PreviewScreen(
-                    file = target.file, displayName = target.title, onBack = viewModel::closePreview,
-                    onShare = { FileUtils.shareFile(context, it) },
-                    siblingCount = target.siblings.size,
-                    siblingIndex = target.siblings.indexOfFirst { it.fileId == target.fileId },
-                    onNavigateSibling = viewModel::navigatePreviewSibling,
-                    initialPage = target.initialPage,
-                    onPageChanged = { page, total -> viewModel.reportProgress(target.fileId, target.courseId, page, total, false) },
-                    initialMediaSec = target.initialMediaSec,
-                    onMediaPositionChanged = { sec, total -> viewModel.reportProgress(target.fileId, target.courseId, sec, total, true) }
-                )
+                target != null ->
+                    PreviewScreen(
+                        file = target.file,
+                        displayName = target.title,
+                        onBack = viewModel::closePreview,
+                        onShare = { FileUtils.shareFile(context, it) },
+                        siblingCount = target.siblings.size,
+                        siblingIndex = target.siblings.indexOfFirst { it.fileId == target.fileId },
+                        onNavigateSibling = viewModel::navigatePreviewSibling,
+                        initialPage = target.initialPage,
+                        onPageChanged = { page, total ->
+                            viewModel.reportProgress(
+                                target.fileId,
+                                target.courseId,
+                                page,
+                                total,
+                                false,
+                            )
+                        },
+                        initialMediaSec = target.initialMediaSec,
+                        onMediaPositionChanged = { sec, total ->
+                            viewModel.reportProgress(
+                                target.fileId,
+                                target.courseId,
+                                sec,
+                                total,
+                                true,
+                            )
+                        },
+                    )
                 search -> saved.SaveableStateProvider("search") { SearchScreen(viewModel) }
-                login is LoginState.LoggedIn -> saved.SaveableStateProvider("library") { HomeScreen(viewModel, snackbars) }
-                else -> LoginScreen(login, onOffline = if (courses.isNotEmpty()) viewModel::openOfflineLibrary else null,
-                    onLogin = viewModel::login)
+                login is LoginState.LoggedIn ->
+                    saved.SaveableStateProvider("library") { HomeScreen(viewModel, snackbars) }
+                else ->
+                    LoginScreen(
+                        login,
+                        onOffline =
+                            if (courses.isNotEmpty()) viewModel::openOfflineLibrary else null,
+                        onLogin = viewModel::login,
+                    )
             }
-            SnackbarHost(snackbars, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp))
+            SnackbarHost(
+                snackbars,
+                Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(16.dp),
+            )
         }
     }
 }

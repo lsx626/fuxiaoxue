@@ -1,23 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <!-- 前景图形占全视口 2/3 安全区内的学士帽（与 PC 端同源几何） -->
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54,37 L86,51 L54,64 L22,51 Z" />
-    <path
-        android:fillColor="#DDE2F9"
-        android:pathData="M36,62 L72,62 L67,77 L41,77 Z" />
-    <path
-        android:strokeColor="#FFFFFF"
-        android:strokeWidth="3"
-        android:strokeLineCap="round"
-        android:fillColor="#00000000"
-        android:pathData="M86,51 L86,76" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M86,78 m-3.2,0 a3.2,3.2 0 1 0 6.4,0 a3.2,3.2 0 1 0 -6.4,0 z" />
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFFFFF" android:pathData="M20,31 L48,39 L48,78 L20,69 Z" />
+    <path android:fillColor="#D8F2EF" android:pathData="M88,31 L60,39 L60,78 L88,69 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M48,39 L54,44 L60,39 L60,78 L54,83 L48,78 Z" />
+    <path android:fillColor="#86D9D3" android:pathData="M27,48 L42,52 L42,57 L27,53 Z" />
+    <path android:fillColor="#86D9D3" android:pathData="M66,51 L81,47 L81,52 L66,56 Z" />
 </vector>

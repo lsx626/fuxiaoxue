@@ -1,4 +1,5 @@
 """主界面：总览、课程列表、文件预览与自动同步调度。"""
+
 from __future__ import annotations
 
 import datetime
@@ -8,34 +9,56 @@ from typing import Optional
 from weakref import ref
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import (QAction, QColor, QFont, QFontMetrics, QGuiApplication,
-                           QKeySequence, QShortcut, QTextCursor)
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFrame,
-                               QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-                               QLineEdit, QMainWindow, QMenu, QMessageBox,
-                               QProgressBar, QPushButton, QSplitter, QStatusBar,
-                               QTableWidget, QTableWidgetItem, QTextEdit,
-                               QVBoxLayout, QWidget,
-                               QSizePolicy)
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetrics,
+    QGuiApplication,
+    QKeySequence,
+    QShortcut,
+    QTextCursor,
+)
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QComboBox,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QSizePolicy,
+    QSplitter,
+    QStatusBar,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
 
 from .. import __version__
-from ..auth import AuthError
 from ..config import load_config
 from ..search_index import filter_file_records
 from ..state import StateStore
 from ..utils import clean_course_name, format_size, sanitize_path_component
 from .config_io import load_gui_state, save_gui_state
-from .icon import app_icon
+from .deadlines_dialog import DeadlinesDialog
+from .icon import app_icon, line_icon
 from .login_window import LoginWindow
 from .notifier import WindowsNotifier
 from .previewer import DocumentPreviewDialog
-from .search_dialog import SearchDialog
-from .deadlines_dialog import DeadlinesDialog
 from .recent_changes_dialog import RecentChangesDialog
+from .search_dialog import SearchDialog
 from .settings_dialog import SettingsDialog
 from .sharing import show_share_menu
 from .storage_manager import StorageManagerDialog
-from .styles import (ACCENT, BG, CARD, SUCCESS, TEXT, TEXT_SECONDARY, WARNING, DANGER)
+from .styles import ACCENT, CARD, DANGER, SUCCESS, TEXT, TEXT_SECONDARY, WARNING
 from .tray import TrayController
 from .workers import SilentLoginWorker, SyncWorker
 
@@ -98,8 +121,7 @@ class ElidedLabel(QLabel):
     def _refresh_elided_text(self) -> None:
         width = max(0, self.contentsRect().width())
         if width:
-            rendered = QFontMetrics(self.font()).elidedText(
-                self._full_text, Qt.ElideRight, width)
+            rendered = QFontMetrics(self.font()).elidedText(self._full_text, Qt.ElideRight, width)
         else:
             rendered = self._full_text
         if QLabel.text(self) != rendered:
@@ -127,7 +149,7 @@ class MainWindow(QMainWindow):
         self.preview_dialog: Optional[DocumentPreviewDialog] = None
         self.user: dict = {}
         self._auto_sync_remaining = 0  # 距下次自动同步的秒数
-        self._course_index = 0         # 当前同步到的课程序号（进度条用）
+        self._course_index = 0  # 当前同步到的课程序号（进度条用）
         self._quitting = False
         self._quit_pending = False
         self._current_file_course_id: Optional[int] = None  # 当前展开文件列表的课程 ID
@@ -165,8 +187,8 @@ class MainWindow(QMainWindow):
         central = QWidget()
         central.setObjectName("root")
         layout = QVBoxLayout(central)
-        layout.setContentsMargins(20, 16, 20, 12)
-        layout.setSpacing(12)
+        layout.setContentsMargins(18, 14, 18, 10)
+        layout.setSpacing(11)
 
         layout.addWidget(self._build_header())
         layout.addWidget(self._build_stats_row())
@@ -184,8 +206,9 @@ class MainWindow(QMainWindow):
 
     def _build_header(self) -> QWidget:
         header = QFrame()
+        header.setObjectName("appHeader")
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(2, 0, 2, 0)
+        header_layout.setContentsMargins(18, 13, 14, 13)
         header_layout.setSpacing(12)
 
         icon_label = QLabel()
@@ -197,10 +220,11 @@ class MainWindow(QMainWindow):
         titles = QVBoxLayout(title_container)
         titles.setSpacing(1)
         title = QLabel("复小学")
-        title.setObjectName("titleLabel")
+        title.setObjectName("brandTitle")
         subtitle = ElidedLabel(
-            f"{self.cfg.base_url.replace('https://', '')} · 本地目录 {self.cfg.root_dir}")
-        subtitle.setObjectName("subtitleLabel")
+            f"{self.cfg.base_url.replace('https://', '')} · 本地目录 {self.cfg.root_dir}"
+        )
+        subtitle.setObjectName("brandSubtitle")
         titles.addWidget(title)
         titles.addWidget(subtitle)
         header_layout.addWidget(title_container, 1)
@@ -211,26 +235,32 @@ class MainWindow(QMainWindow):
         self.user_chip.setMinimumWidth(96)
         self.user_chip.setMaximumWidth(260)
         self.user_chip.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        self.user_chip.setStyleSheet(
-            f"background: {CARD}; border: 1px solid #E2E7F1; border-radius: 12px;"
-            f"padding: 5px 12px; color: {TEXT_SECONDARY};")
+        self.user_chip.setObjectName("userChip")
         header_layout.addWidget(self.user_chip)
 
-        for text, handler in (("搜索资料", self._open_search),
-                              ("截止日期", self._open_deadlines),
-                              ("设置", self._open_settings)):
+        for text, icon_name, handler in (
+            ("搜索资料", "search", self._open_search),
+            ("截止日期", "calendar", self._open_deadlines),
+            ("设置", "settings", self._open_settings),
+        ):
             button = QPushButton(text)
+            button.setObjectName("headerAction")
+            button.setIcon(line_icon(icon_name, "#DDE8FF"))
             button.setCursor(Qt.PointingHandCursor)
             button.setMinimumHeight(34)
             button.clicked.connect(handler)
             header_layout.addWidget(button)
         more = QPushButton("更多")
+        more.setObjectName("headerAction")
+        more.setIcon(line_icon("more", "#DDE8FF"))
         more.setCursor(Qt.PointingHandCursor)
         menu = QMenu(more)
-        for text, handler in (("最近变更", self._open_recent_changes),
-                              ("打开同步目录", self._open_root_dir),
-                              ("存储管理", self._open_storage_manager),
-                              ("同步日志", self._toggle_log_panel)):
+        for text, handler in (
+            ("最近变更", self._open_recent_changes),
+            ("打开同步目录", self._open_root_dir),
+            ("存储管理", self._open_storage_manager),
+            ("同步日志", self._toggle_log_panel),
+        ):
             menu.addAction(text, handler)
         more.setMenu(menu)
         header_layout.addWidget(more)
@@ -253,7 +283,7 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _stat_card(parent_grid, column: int, caption: str, value: str) -> QLabel:
         card = QFrame()
-        card.setObjectName("card")
+        card.setObjectName("metricCard")
         layout = QVBoxLayout(card)
         layout.setContentsMargins(18, 10, 18, 10)
         layout.setSpacing(4)
@@ -301,6 +331,7 @@ class MainWindow(QMainWindow):
 
         self.sync_button = QPushButton("立即同步")
         self.sync_button.setObjectName("primary")
+        self.sync_button.setIcon(line_icon("sync", "#FFFFFF"))
         self.sync_button.setCursor(Qt.PointingHandCursor)
         self.sync_button.setMinimumSize(100, 36)
         self.sync_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -309,6 +340,7 @@ class MainWindow(QMainWindow):
         action_layout.addWidget(self.sync_button)
 
         self.full_sync_button = QPushButton("全量同步")
+        self.full_sync_button.setIcon(line_icon("sync", ACCENT))
         self.full_sync_button.setCursor(Qt.PointingHandCursor)
         self.full_sync_button.setMinimumSize(100, 36)
         self.full_sync_button.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
@@ -341,10 +373,10 @@ class MainWindow(QMainWindow):
 
         self.course_splitter = QSplitter(Qt.Vertical)
         self.course_splitter.setHandleWidth(1)
-        self.course_splitter.setStyleSheet(f"""
-            QSplitter::handle {{
+        self.course_splitter.setStyleSheet("""
+            QSplitter::handle {
                 background: #EEF1F7;
-            }}
+            }
         """)
 
         # 上半：课程表格（带标题栏）
@@ -379,6 +411,7 @@ class MainWindow(QMainWindow):
         self.term_filter.currentIndexChanged.connect(self._apply_course_filter)
         filters.addWidget(self.term_filter)
         self.open_course_button = QPushButton("查看文件")
+        self.open_course_button.setIcon(line_icon("folder", ACCENT))
         self.open_course_button.setEnabled(False)
         self.open_course_button.clicked.connect(self._show_selected_course_files)
         filters.addWidget(self.open_course_button)
@@ -386,7 +419,8 @@ class MainWindow(QMainWindow):
 
         self.course_table = QTableWidget(0, 7)
         self.course_table.setHorizontalHeaderLabels(
-            ["课程", "学期", "文件数", "已下载", "本地大小", "最近同步", "ID"])
+            ["课程", "学期", "文件数", "已下载", "本地大小", "最近同步", "ID"]
+        )
         self.course_table.setColumnHidden(6, True)
         self.course_table.verticalHeader().setVisible(False)
         self.course_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -406,8 +440,7 @@ class MainWindow(QMainWindow):
             header.setSectionResizeMode(column, QHeaderView.ResizeToContents)
         course_layout.addWidget(self.course_table)
 
-        self.course_empty_label = QLabel(
-            "暂无课程。登录并点击「立即同步」开始同步课程文件。")
+        self.course_empty_label = QLabel("暂无课程。登录并点击「立即同步」开始同步课程文件。")
         self.course_empty_label.setObjectName("hint")
         self.course_empty_label.setAlignment(Qt.AlignCenter)
         self.course_empty_label.setStyleSheet("padding: 28px;")
@@ -435,7 +468,8 @@ class MainWindow(QMainWindow):
         self.file_filter_edit.setAccessibleName("查找本课程文件")
         self.file_filter_edit.setStyleSheet(
             f"QLineEdit {{ background: {CARD}; border: 1px solid #E2E7F1;"
-            f" border-radius: 8px; padding: 4px 10px; color: {TEXT}; }}")
+            f" border-radius: 8px; padding: 4px 10px; color: {TEXT}; }}"
+        )
         self.file_filter_edit.textChanged.connect(self._apply_file_filter)
         file_header_row.addWidget(self.file_filter_edit)
         self.file_count_label = QLabel("")
@@ -447,19 +481,27 @@ class MainWindow(QMainWindow):
         file_actions.setContentsMargins(18, 4, 18, 8)
         self.file_status_filter = QComboBox()
         self.file_status_filter.setAccessibleName("按状态筛选文件")
-        for text, value in (("全部文件", ""), ("未读", "unread"),
-                            ("已下载", "downloaded"), ("下载失败", "failed"),
-                            ("待下载", "pending"), ("已锁定", "locked")):
+        for text, value in (
+            ("全部文件", ""),
+            ("未读", "unread"),
+            ("已下载", "downloaded"),
+            ("下载失败", "failed"),
+            ("待下载", "pending"),
+            ("已锁定", "locked"),
+        ):
             self.file_status_filter.addItem(text, value)
         self.file_status_filter.currentIndexChanged.connect(
-            lambda: self._apply_file_filter(self.file_filter_edit.text()))
+            lambda: self._apply_file_filter(self.file_filter_edit.text())
+        )
         file_actions.addWidget(self.file_status_filter)
         file_actions.addStretch()
         resume = QPushButton("继续阅读")
+        resume.setIcon(line_icon("play", ACCENT))
         resume.clicked.connect(lambda: self._resume_reading(self._current_file_course_id))
         file_actions.addWidget(resume)
         self.preview_button = QPushButton("预览所选文件")
         self.preview_button.setObjectName("primary")
+        self.preview_button.setIcon(line_icon("play", "#FFFFFF"))
         self.preview_button.setEnabled(False)
         self.preview_button.clicked.connect(self._preview_selected_file)
         file_actions.addWidget(self.preview_button)
@@ -467,7 +509,8 @@ class MainWindow(QMainWindow):
 
         self.file_table = QTableWidget(0, 5)
         self.file_table.setHorizontalHeaderLabels(
-            ["文件名", "大小", "状态", "阅读进度", "下载时间"])
+            ["文件名", "大小", "状态", "阅读进度", "下载时间"]
+        )
         self.file_table.verticalHeader().setVisible(False)
         self.file_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.file_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -581,6 +624,7 @@ class MainWindow(QMainWindow):
             # 老配置 method 为空时 load_config 会回退成 "token"；若钥匙串里有
             # 密码，就按密码登录处理，避免老用户每次启动都被要求重新登录。
             from ..password_login import has_stored_password
+
             if self.cfg.uis_username and has_stored_password(self.cfg.uis_username):
                 return True
             # 没记住密码但会话 cookie 还在：交给静默登录验证有效性即可
@@ -589,6 +633,7 @@ class MainWindow(QMainWindow):
             return bool(self.cfg.token)
         if method == "password":
             from ..password_login import has_stored_password
+
             if self.cfg.uis_username and has_stored_password(self.cfg.uis_username):
                 return True
             return os.path.exists(self.cfg.cookie_file)
@@ -641,11 +686,15 @@ class MainWindow(QMainWindow):
     def _on_first_login(self, user: dict) -> None:
         """首次登录成功：把方式写回配置，之后自动登录。"""
         from .config_io import update_config
+
         method = "password" if user.get("remember") else "cookie"
-        update_config(self.config_path, [
-            (("auth", "method"), method),
-            (("auth", "uis_username"), user.get("username", "")),
-        ])
+        update_config(
+            self.config_path,
+            [
+                (("auth", "method"), method),
+                (("auth", "uis_username"), user.get("username", "")),
+            ],
+        )
         self.cfg = load_config(self.config_path)
         if self.login_window is not None:
             self.login_window.close()
@@ -678,10 +727,13 @@ class MainWindow(QMainWindow):
 
     def _confirm_full_sync(self) -> None:
         confirm = QMessageBox.question(
-            self, "全量同步",
+            self,
+            "全量同步",
             "将重新下载全部未被排除、且有权访问的课程文件，即使本地已有相同文件。"
             "这可能消耗较多时间和流量。确认继续吗？",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
         if confirm == QMessageBox.Yes:
             self._start_sync(full=True)
 
@@ -724,7 +776,8 @@ class MainWindow(QMainWindow):
             if pending:
                 size = format_size(payload.get("bytes", 0))
                 self.sync_detail_label.setText(
-                    f"{payload.get('name', '')}：下载 {pending} 个文件（{size}）")
+                    f"{payload.get('name', '')}：下载 {pending} 个文件（{size}）"
+                )
             return
 
     def _on_sync_finished(self, stats: dict) -> None:
@@ -823,8 +876,11 @@ class MainWindow(QMainWindow):
         self.course_table.setRowCount(len(courses))
         for row, course in enumerate(courses):
             self._set_table_item(
-                row, 0, clean_course_name(course.get("name") or f"课程 {course.get('id')}"),
-                bold=True)
+                row,
+                0,
+                clean_course_name(course.get("name") or f"课程 {course.get('id')}"),
+                bold=True,
+            )
             self._set_table_item(row, 1, course.get("term") or "")
             files_total = course.get("files_total") or 0
             files_done = course.get("files_done") or 0
@@ -837,7 +893,8 @@ class MainWindow(QMainWindow):
                 done_item.setForeground(QColor(WARNING))
             self.course_table.setItem(row, 3, done_item)
             self._set_table_item(
-                row, 4, format_size(course.get("bytes_downloaded") or 0), align_right=True)
+                row, 4, format_size(course.get("bytes_downloaded") or 0), align_right=True
+            )
             self._set_table_item(row, 5, _relative_time(course.get("last_synced_at")))
             self._set_table_item(row, 6, str(course.get("id")))
         if selected_id is not None:
@@ -854,12 +911,15 @@ class MainWindow(QMainWindow):
         shown = 0
         for row, course in enumerate(courses):
             matches = (not term or course.get("term") == term) and (
-                not query or query in " ".join(str(course.get(key) or "")
-                                               for key in ("name", "code")).casefold())
+                not query
+                or query
+                in " ".join(str(course.get(key) or "") for key in ("name", "code")).casefold()
+            )
             self.course_table.setRowHidden(row, not matches)
             shown += int(matches)
         if self.course_table.currentRow() >= 0 and self.course_table.isRowHidden(
-                self.course_table.currentRow()):
+            self.course_table.currentRow()
+        ):
             self.course_table.clearSelection()
             self.course_table.setCurrentItem(None)
             self.file_panel.hide()
@@ -868,12 +928,15 @@ class MainWindow(QMainWindow):
         self.open_course_button.setEnabled(self._selected_course_id() is not None)
         self.course_count_label.setText(f"{shown} / {len(courses)} 门课程")
         self.course_empty_label.setText(
-            "没有匹配的课程，试试其他名称或学期。" if courses else
-            "暂无课程。登录并点击「立即同步」开始同步课程文件。")
+            "没有匹配的课程，试试其他名称或学期。"
+            if courses
+            else "暂无课程。登录并点击「立即同步」开始同步课程文件。"
+        )
         self.course_empty_label.setVisible(shown == 0)
 
-    def _set_table_item(self, row: int, column: int, text: str,
-                        bold: bool = False, align_right: bool = False) -> None:
+    def _set_table_item(
+        self, row: int, column: int, text: str, bold: bool = False, align_right: bool = False
+    ) -> None:
         item = QTableWidgetItem(text)
         item.setToolTip(text)
         if align_right:
@@ -939,7 +1002,8 @@ class MainWindow(QMainWindow):
             # 远端已删除的文件不在课程文件列表中展示（对用户没有阅读价值）；
             # 行仍保留在库里供增量逻辑与存储管理使用。
             files = [
-                f for f in state.list_files_by_course(course_id)
+                f
+                for f in state.list_files_by_course(course_id)
                 if f.get("status") != "remote_missing"
             ]
             # v1.1.2：批量取阅读进度（进度列 + 未读优先排序）
@@ -948,8 +1012,7 @@ class MainWindow(QMainWindow):
             course_name = ""
             for course in state.list_courses():
                 if course.get("id") == course_id:
-                    course_name = clean_course_name(
-                        course.get("name") or f"课程 {course_id}")
+                    course_name = clean_course_name(course.get("name") or f"课程 {course_id}")
                     break
         finally:
             state.close()
@@ -968,8 +1031,12 @@ class MainWindow(QMainWindow):
         progress = getattr(self, "_course_reading_progress", {}) or {}
         status = self.file_status_filter.currentData()
         if status == "unread":
-            filtered = [f for f in filtered if f.get("status") == "downloaded"
-                        and not int((progress.get(f.get("file_id")) or {}).get("position") or 0)]
+            filtered = [
+                f
+                for f in filtered
+                if f.get("status") == "downloaded"
+                and not int((progress.get(f.get("file_id")) or {}).get("position") or 0)
+            ]
         elif status:
             filtered = [f for f in filtered if f.get("status") == status]
         filtered = self._sort_files_unread_first(filtered, progress)
@@ -979,14 +1046,17 @@ class MainWindow(QMainWindow):
         shown = len(filtered)
         if query.strip() or status:
             self.file_count_label.setText(
-                f"共 {total} 个文件 · 命中 {shown} 项" if total else "暂无文件")
+                f"共 {total} 个文件 · 命中 {shown} 项" if total else "暂无文件"
+            )
         else:
             self.file_count_label.setText(f"共 {total} 个文件")
         if not files:
             self.file_empty_label.setText("该课程还没有同步任何文件。")
             self.file_empty_label.setVisible(True)
         elif not filtered:
-            self.file_empty_label.setText("没有符合当前条件的文件，可清空关键字或切换为「全部文件」。")
+            self.file_empty_label.setText(
+                "没有符合当前条件的文件，可清空关键字或切换为「全部文件」。"
+            )
             self.file_empty_label.setVisible(True)
         else:
             self.file_empty_label.setVisible(False)
@@ -1037,14 +1107,17 @@ class MainWindow(QMainWindow):
     def _reading_progress_text(self, file_info: dict) -> tuple:
         """v1.1.2：进度列文案。无记录返回「未读」（强调色），媒体显示时间。"""
         progress = (getattr(self, "_course_reading_progress", {}) or {}).get(
-            file_info.get("file_id"))
+            file_info.get("file_id")
+        )
         if not progress:
             return ("未读", ACCENT)
         position = int(progress.get("position") or 0)
         total = int(progress.get("total") or 0)
         if progress.get("is_media"):
+
             def fmt(seconds: int) -> str:
                 return f"{seconds // 60}:{seconds % 60:02d}"
+
             return (f"{fmt(position)} / {fmt(total)}", TEXT_SECONDARY)
         if not position:
             return ("未读", ACCENT)
@@ -1066,8 +1139,9 @@ class MainWindow(QMainWindow):
                 read.append(record)
             else:
                 unread.append(record)
-        read.sort(key=lambda r: str(progress[r.get("file_id")].get("updated_at") or ""),
-                  reverse=True)
+        read.sort(
+            key=lambda r: str(progress[r.get("file_id")].get("updated_at") or ""), reverse=True
+        )
         return unread + read
 
     @staticmethod
@@ -1101,8 +1175,7 @@ class MainWindow(QMainWindow):
             return
         self._open_preview_for_path(file_path)
 
-    def _open_preview_for_path(self, file_path: str,
-                               course_id: Optional[int] = None) -> None:
+    def _open_preview_for_path(self, file_path: str, course_id: Optional[int] = None) -> None:
         """打开预览对话框（文件列表与搜索结果共用入口）。
 
         v1.1.2：带上课程上下文与库路径，预览内即可翻文件、记录阅读进度。
@@ -1114,20 +1187,16 @@ class MainWindow(QMainWindow):
         if course_id is None:
             course_id = getattr(self, "_current_course_id", None)
         dialog = DocumentPreviewDialog(
-            file_path, parent=self, course_id=course_id,
-            state_db=self.cfg.state_db)
+            file_path, parent=self, course_id=course_id, state_db=self.cfg.state_db
+        )
         dialog_ref = ref(dialog)
         dialog.finished.connect(
-            lambda _result, preview_ref=dialog_ref: self._release_preview_dialog(
-                preview_ref()
-            )
+            lambda _result, preview_ref=dialog_ref: self._release_preview_dialog(preview_ref())
         )
         self.preview_dialog = dialog
         dialog.show()
 
-    def _release_preview_dialog(
-        self, dialog: Optional[DocumentPreviewDialog]
-    ) -> None:
+    def _release_preview_dialog(self, dialog: Optional[DocumentPreviewDialog]) -> None:
         """Forget only the preview that actually finished.
 
         The identity check prevents a delayed signal from an older background
@@ -1197,8 +1266,7 @@ class MainWindow(QMainWindow):
         if path and os.path.exists(path):
             self._open_preview_for_path(path)
         else:
-            QMessageBox.information(
-                self, "搜索", "文件在本地不存在，可能尚未下载或已被移除。")
+            QMessageBox.information(self, "搜索", "文件在本地不存在，可能尚未下载或已被移除。")
 
     def _format_sync_notice(self, downloaded: int, total_bytes: int) -> str:
         """把本轮新增/更新整理成「课程：文件名…」的摘要，取代裸计数。"""
@@ -1216,8 +1284,7 @@ class MainWindow(QMainWindow):
             return f"新增 {downloaded} 个文件，共 {format_size(total_bytes)}"
         grouped = {}
         for item in changes:
-            course = clean_course_name(
-                item.get("course_name") or f"课程 {item.get('course_id')}")
+            course = clean_course_name(item.get("course_name") or f"课程 {item.get('course_id')}")
             grouped.setdefault(course, []).append(item.get("filename") or "未知文件")
         lines = []
         for course, names in list(grouped.items())[:3]:
@@ -1318,11 +1385,9 @@ class MainWindow(QMainWindow):
         try:
             for course in state.list_courses():
                 if course.get("id") == course_id:
-                    name = sanitize_path_component(
-                        course.get("name") or f"course_{course_id}")
+                    name = sanitize_path_component(course.get("name") or f"course_{course_id}")
                     code = course.get("code") or ""
-                    directory = name if not code else (
-                        f"{name} [{sanitize_path_component(code)}]")
+                    directory = name if not code else (f"{name} [{sanitize_path_component(code)}]")
                     return os.path.join(self.cfg.root_dir, directory)
         finally:
             state.close()
@@ -1345,6 +1410,7 @@ class MainWindow(QMainWindow):
         if course_id is None:
             return
         from PySide6.QtWidgets import QMenu
+
         menu = QMenu(self)
         resume_action = menu.addAction("继续阅读（最近阅读的文件）")
         menu.addSeparator()
@@ -1374,16 +1440,19 @@ class MainWindow(QMainWindow):
             progress = state.progress_by_course(course_id)
             # 按 updated_at 降序找第一个仍有本地文件的记录
             ordered = sorted(
-                progress.items(),
-                key=lambda kv: str(kv[1].get("updated_at") or ""),
-                reverse=True)
+                progress.items(), key=lambda kv: str(kv[1].get("updated_at") or ""), reverse=True
+            )
             best_path = None
             for file_id, prog in ordered:
                 if not int(prog.get("position") or 0):
                     continue
                 row = state.get_file(file_id)
-                if row and row.get("status") == "downloaded" and row.get("local_path") \
-                        and os.path.exists(row["local_path"]):
+                if (
+                    row
+                    and row.get("status") == "downloaded"
+                    and row.get("local_path")
+                    and os.path.exists(row["local_path"])
+                ):
                     best_path = row["local_path"]
                     break
         except Exception:  # pylint: disable=broad-except
@@ -1394,7 +1463,8 @@ class MainWindow(QMainWindow):
             self._open_preview_for_path(best_path, course_id=course_id)
         else:
             QMessageBox.information(
-                self, "继续阅读", "该课程还没有阅读记录，双击课程打开文件列表后开始阅读。")
+                self, "继续阅读", "该课程还没有阅读记录，双击课程打开文件列表后开始阅读。"
+            )
 
     def _open_course_dir(self, course_id: int) -> None:
         directory = self._course_local_dir(course_id)
@@ -1446,6 +1516,7 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _autostart_enabled_safe() -> bool:
         from . import autostart
+
         try:
             return autostart.is_autostart_enabled()
         except Exception:  # pylint: disable=broad-except
@@ -1453,6 +1524,7 @@ class MainWindow(QMainWindow):
 
     def _on_tray_autostart(self, enabled: bool) -> None:
         from . import autostart
+
         try:
             autostart.set_autostart(enabled)
         except Exception as exc:  # pylint: disable=broad-except
@@ -1472,8 +1544,7 @@ class MainWindow(QMainWindow):
             return
         event.ignore()
         self.hide()
-        self.tray.notify("复小学",
-                         "已在后台运行，课程文件会自动保持同步。右键托盘图标可退出。")
+        self.tray.notify("复小学", "已在后台运行，课程文件会自动保持同步。右键托盘图标可退出。")
 
     def _quit(self) -> None:
         """
@@ -1514,6 +1585,7 @@ class MainWindow(QMainWindow):
     def _await_quit_workers(self, timeout_ms: int) -> bool:
         """有界等待所有后台 worker 结束；仍在运行的返回 False。"""
         import time as _time
+
         deadline = _time.monotonic() + timeout_ms / 1000.0
         for worker in self._pending_quit_workers():
             remaining_ms = int(max(0.0, deadline - _time.monotonic()) * 1000)
@@ -1537,10 +1609,12 @@ class MainWindow(QMainWindow):
         self.tray.tray.hide()
         self.close()
         from PySide6.QtWidgets import QApplication
+
         QApplication.instance().quit()
 
     def _restore_geometry(self) -> None:
         from .paths import gui_state_path
+
         state = load_gui_state(gui_state_path())
         geometry = state.get("geometry")
         if geometry:
@@ -1549,11 +1623,11 @@ class MainWindow(QMainWindow):
             screen = QGuiApplication.primaryScreen().availableGeometry()
             width, height = 960, 680
             self.resize(width, height)
-            self.move(screen.center().x() - width // 2,
-                      screen.center().y() - height // 2)
+            self.move(screen.center().x() - width // 2, screen.center().y() - height // 2)
 
     def _save_geometry(self) -> None:
         from .paths import gui_state_path
+
         state = load_gui_state(gui_state_path())
         state["geometry"] = self.saveGeometry().data().decode("latin1")
         save_gui_state(gui_state_path(), state)

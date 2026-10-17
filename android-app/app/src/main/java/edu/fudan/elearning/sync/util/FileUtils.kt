@@ -11,11 +11,7 @@ import java.io.File
 object FileUtils {
 
     fun fileUri(context: Context, path: String): android.net.Uri =
-        FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            File(path)
-        )
+        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", File(path))
 
     /** 分享文件（系统分享面板）：只授予临时只读 URI 权限。 */
     fun shareFile(context: Context, file: FileItem) {
@@ -30,11 +26,12 @@ object FileUtils {
                 return
             }
             val uri = fileUri(context, file.localPath)
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = guessMime(file.filename)
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
+            val intent =
+                Intent(Intent.ACTION_SEND).apply {
+                    type = guessMime(file.filename)
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
             // ApplicationContext 启动 Activity 必须加 NEW_TASK，否则抛
             // "Calling startActivity() from outside of an Activity context"
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -56,11 +53,12 @@ object FileUtils {
         }
         try {
             val uri = fileUri(context, file.absolutePath)
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = guessMime(file.name)
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
+            val intent =
+                Intent(Intent.ACTION_SEND).apply {
+                    type = guessMime(file.name)
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             val chooser = Intent.createChooser(intent, "分享文件")
             chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -71,16 +69,18 @@ object FileUtils {
             toast(context, "无法分享此文件：${e.message ?: "未知错误"}")
         }
     }
+
     /** 文件同步状态的中文描述。 */
-    fun statusText(status: String): String = when (status) {
-        "downloaded" -> "已下载"
-        "pending" -> "待下载"
-        "skipped" -> "已跳过"
-        "remote_missing" -> "远端已删除"
-        "failed" -> "下载失败"
-        "locked" -> "已锁定"
-        else -> status
-    }
+    fun statusText(status: String): String =
+        when (status) {
+            "downloaded" -> "已下载"
+            "pending" -> "待下载"
+            "skipped" -> "已跳过"
+            "remote_missing" -> "远端已删除"
+            "failed" -> "下载失败"
+            "locked" -> "已锁定"
+            else -> status
+        }
 
     /** 短暂提示。 */
     private fun toast(context: Context, message: String) {
@@ -100,9 +100,11 @@ object FileUtils {
             "odt" -> "application/vnd.oasis.opendocument.text"
             "ods" -> "application/vnd.oasis.opendocument.spreadsheet"
             "odp" -> "application/vnd.oasis.opendocument.presentation"
-            "txt", "md" -> "text/plain"
+            "txt",
+            "md" -> "text/plain"
             "csv" -> "text/csv"
-            "jpg", "jpeg" -> "image/jpeg"
+            "jpg",
+            "jpeg" -> "image/jpeg"
             "png" -> "image/png"
             "gif" -> "image/gif"
             "mp4" -> "video/mp4"
@@ -140,10 +142,10 @@ object FileUtils {
         return "${seconds / 60} 分 ${seconds % 60} 秒"
     }
 
-    /** 从 Canvas 课程名中剥离内嵌的选课代码（如「数据处理与数据库 DATA130012.01」
-     * 或「DATA130012.01 数据处理与数据库」），纯展示用，不改数据库。
-     * 注意：括号本身可能是名字的一部分（如「普通化学A（上）」），只有**包着代码**
-     * 的括号才整对删掉，不能把所有括号都替换成空格。 */
+    /**
+     * 从 Canvas 课程名中剥离内嵌的选课代码（如「数据处理与数据库 DATA130012.01」 或「DATA130012.01 数据处理与数据库」），纯展示用，不改数据库。
+     * 注意：括号本身可能是名字的一部分（如「普通化学A（上）」），只有**包着代码** 的括号才整对删掉，不能把所有括号都替换成空格。
+     */
     fun cleanCourseName(raw: String): String {
         if (raw.isEmpty()) return raw
         // 复旦选课代码形如 DATA130012.01 / CHEM10003.03（主编号 5~6 位）

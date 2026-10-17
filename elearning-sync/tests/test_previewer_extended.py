@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Small, dependency-light checks for the extended in-app previewer."""
+
 from __future__ import annotations
 
 import os
@@ -45,9 +46,7 @@ def _office_result_holder():
         _temp_pdf_dir=None,
         file_path="lesson.docx",
     )
-    holder._claim_office_result = MethodType(
-        DocumentPreviewDialog._claim_office_result, holder
-    )
+    holder._claim_office_result = MethodType(DocumentPreviewDialog._claim_office_result, holder)
     # v1.1.2：真实对话框在转换后会恢复阅读进度；测试桩只需无操作占位
     holder._restore_progress = lambda: None
     return holder
@@ -116,8 +115,8 @@ def test_extracts_docx_blocks(tmp_path):
         {
             "word/document.xml": (
                 '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
-                '<w:body><w:p><w:r><w:t>Hello</w:t></w:r></w:p>'
-                '<w:p><w:r><w:t>World</w:t></w:r></w:p></w:body></w:document>'
+                "<w:body><w:p><w:r><w:t>Hello</w:t></w:r></w:p>"
+                "<w:p><w:r><w:t>World</w:t></w:r></w:p></w:body></w:document>"
             )
         },
     )
@@ -141,7 +140,7 @@ def test_extracts_xlsx_and_pptx_text(tmp_path):
             "xl/worksheets/sheet1.xml": (
                 '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
                 '<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>value</t></is></c>'
-                '</row></sheetData></worksheet>'
+                "</row></sheetData></worksheet>"
             ),
         },
     )
@@ -154,7 +153,7 @@ def test_extracts_xlsx_and_pptx_text(tmp_path):
             "ppt/slides/slide1.xml": (
                 '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
                 '<p:cSld><p:spTree><a:t xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">Title</a:t>'
-                '</p:spTree></p:cSld></p:sld>'
+                "</p:spTree></p:cSld></p:sld>"
             )
         },
     )
@@ -242,6 +241,7 @@ def test_openpyxl_reader_preserves_empty_cells_formulas_and_dates(tmp_path):
 
 def test_media_loop_uses_qt6_player_enum():
     """QMediaPlayer.loops() returns int; its enum belongs to the class."""
+
     class FakePlayer:
         class Loops:
             Infinite = -1
@@ -399,8 +399,12 @@ def test_finished_old_preview_does_not_clear_new_preview_reference():
     old_preview = object()
     new_preview = object()
     refreshed = []
-    holder = SimpleNamespace(preview_dialog=new_preview, _file_panel_visible=True,
-                             _current_file_course_id=7, _populate_file_list=refreshed.append)
+    holder = SimpleNamespace(
+        preview_dialog=new_preview,
+        _file_panel_visible=True,
+        _current_file_course_id=7,
+        _populate_file_list=refreshed.append,
+    )
 
     from fudan_sync.gui.main_window import MainWindow
 
@@ -429,9 +433,7 @@ def test_successful_office_result_hands_pdf_to_gui(tmp_path):
     holder._load_pdf_preview = loaded.append
     holder._load_structured_office_preview = lambda _ext: None
 
-    DocumentPreviewDialog._on_office_rendered(
-        holder, str(output_path), str(output_dir)
-    )
+    DocumentPreviewDialog._on_office_rendered(holder, str(output_path), str(output_dir))
 
     assert holder.file_path == str(output_path)
     assert holder._temp_pdf_path == str(output_path)
@@ -470,9 +472,7 @@ def test_office_result_arriving_after_close_is_removed(tmp_path):
     holder._load_pdf_preview = loaded.append
     holder._load_structured_office_preview = fallbacks.append
 
-    DocumentPreviewDialog._on_office_rendered(
-        holder, str(output_path), str(output_dir)
-    )
+    DocumentPreviewDialog._on_office_rendered(holder, str(output_path), str(output_dir))
 
     assert not output_dir.exists()
     assert loaded == []
@@ -493,9 +493,7 @@ def test_office_result_for_previous_sibling_is_discarded(tmp_path):
     holder = _office_result_holder()
     holder._original_file_path = str(tmp_path / "new.docx")
     holder._pending_office_dirs.add(str(output_dir))
-    holder._discard_office_result = MethodType(
-        DocumentPreviewDialog._discard_office_result, holder
-    )
+    holder._discard_office_result = MethodType(DocumentPreviewDialog._discard_office_result, holder)
     loaded = []
     fallbacks = []
     holder._load_pdf_preview = loaded.append
@@ -529,16 +527,17 @@ def test_structured_extraction_result_for_previous_sibling_is_discarded(tmp_path
     )
 
     DocumentPreviewDialog._on_structured_extracted(
-        holder, ("text", ["旧内容"]), str(tmp_path / "old.docx"))
+        holder, ("text", ["旧内容"]), str(tmp_path / "old.docx")
+    )
     assert shown == []
     assert unsupported == []
 
     DocumentPreviewDialog._on_structured_extracted(
-        holder, ("text", ["新内容"]), str(tmp_path / "new.docx"))
+        holder, ("text", ["新内容"]), str(tmp_path / "new.docx")
+    )
     assert shown == [["新内容"]]
 
-    DocumentPreviewDialog._on_structured_extracted(
-        holder, None, str(tmp_path / "new.docx"))
+    DocumentPreviewDialog._on_structured_extracted(holder, None, str(tmp_path / "new.docx"))
     assert unsupported == ["Office 文档预览"]
 
 
@@ -625,9 +624,7 @@ def test_worker_completion_after_close_cleans_without_gui_event_loop(tmp_path):
     holder._register_office_result = MethodType(
         DocumentPreviewDialog._register_office_result, holder
     )
-    holder._discard_office_result = MethodType(
-        DocumentPreviewDialog._discard_office_result, holder
-    )
+    holder._discard_office_result = MethodType(DocumentPreviewDialog._discard_office_result, holder)
 
     DocumentPreviewDialog._start_office_render(holder)
     assert conversion_started.wait(timeout=5)

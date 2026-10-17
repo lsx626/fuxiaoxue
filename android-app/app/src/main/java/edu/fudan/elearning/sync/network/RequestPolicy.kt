@@ -17,7 +17,7 @@ data class RequestPolicy(
     val defaultRateLimitMs: Long = 8_000,
     val slowDownRemainingThreshold: Int = 15,
     val slowDownExtraMs: Long = 500,
-    val maxPages: Int = 200
+    val maxPages: Int = 200,
 ) {
     /** 第 [attempt] 次失败后的退避：500ms、1s、2s…，封顶 [maxBackoffMs]。 */
     fun backoffMs(attempt: Int): Long {

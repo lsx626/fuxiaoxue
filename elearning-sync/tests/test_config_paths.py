@@ -4,6 +4,7 @@ The GUI and CLI are often started from a shortcut, a scheduler, or another
 working directory. Relative paths in a config must therefore stay relative
 to the config file, not to whichever directory happened to launch the app.
 """
+
 from __future__ import annotations
 
 import os

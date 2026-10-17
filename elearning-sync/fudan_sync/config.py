@@ -1,4 +1,5 @@
 """配置加载与校验."""
+
 from __future__ import annotations
 
 import os
@@ -125,8 +126,10 @@ def load_config(path: str) -> AppConfig:
     cfg.uis_username = str(auth.get("uis_username") or "")
     # 兼容三种键名：auth.method_cookie_file（旧）/ auth.cookie_file / 顶层 cookie_file
     cfg.cookie_file = _resolve_config_path(
-        auth.get("method_cookie_file") or auth.get("cookie_file")
-        or data.get("cookie_file") or "cookies.json",
+        auth.get("method_cookie_file")
+        or auth.get("cookie_file")
+        or data.get("cookie_file")
+        or "cookies.json",
         config_dir,
     )
     # 环境变量覆盖（便于 CI / 脚本注入，避免明文写在配置里）
@@ -144,22 +147,27 @@ def load_config(path: str) -> AppConfig:
             concurrency=int(_deep_get(sync_data, "download", "concurrency", default=4)),
             max_retries=int(_deep_get(sync_data, "download", "max_retries", default=5)),
             max_file_size_mb=float(_deep_get(sync_data, "download", "max_file_size_mb", default=0)),
-            min_free_space_gb=float(_deep_get(sync_data, "download", "min_free_space_gb", default=1)),
+            min_free_space_gb=float(
+                _deep_get(sync_data, "download", "min_free_space_gb", default=1)
+            ),
             exclude_extensions=[
                 # 统一规范：小写、去空白、并且**总是带前导点**。
                 # 引擎用 os.path.splitext() 得到的是 ".exe" 这类带点形式，
                 # 而 GUI 历史上会把用户输入存成 "exe"，导致排除规则永远匹配不上。
-                _normalize_ext(e) for e in (_deep_get(sync_data, "download",
-                                                      "exclude_extensions", default=[]) or [])
+                _normalize_ext(e)
+                for e in (_deep_get(sync_data, "download", "exclude_extensions", default=[]) or [])
                 if _normalize_ext(e)
             ],
             exclude_folders=[
-                str(f).strip().lower() for f in
-                (_deep_get(sync_data, "download", "exclude_folders",
-                           default=["course_image"]) or [])
+                str(f).strip().lower()
+                for f in (
+                    _deep_get(sync_data, "download", "exclude_folders", default=["course_image"])
+                    or []
+                )
             ],
-            exclude_installer_files=bool(_deep_get(sync_data, "download",
-                                                   "exclude_installer_files", default=True)),
+            exclude_installer_files=bool(
+                _deep_get(sync_data, "download", "exclude_installer_files", default=True)
+            ),
         ),
         prune=bool(sync_data.get("prune", False)),
         archive_pages=bool(sync_data.get("archive_pages", True)),
@@ -176,7 +184,9 @@ def validate_config(cfg: AppConfig) -> List[str]:
     if cfg.auth_method not in ("token", "cookie", "browser", "password"):
         problems.append(f"未知 auth.method: {cfg.auth_method}")
     if cfg.auth_method == "token" and not cfg.token:
-        problems.append("auth.method=token 但未配置 auth.token（可设置环境变量 FUDAN_ELEARNING_TOKEN）")
+        problems.append(
+            "auth.method=token 但未配置 auth.token（可设置环境变量 FUDAN_ELEARNING_TOKEN）"
+        )
     if cfg.auth_method == "password" and not cfg.uis_username:
         problems.append("auth.method=password 但未配置 auth.uis_username")
     if cfg.sync.download.concurrency < 1:

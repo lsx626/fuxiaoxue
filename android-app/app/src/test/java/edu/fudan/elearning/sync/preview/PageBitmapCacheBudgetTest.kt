@@ -6,8 +6,7 @@ import org.junit.Test
 /**
  * 页位图缓存预算的 JVM 单测。
  *
- * 预算按设备堆大小自适应：低内存设备必须至少留出 32 MiB 给渲染，超大堆设备
- * 也不能把预算抬到失控（上限 96 MiB）。
+ * 预算按设备堆大小自适应：低内存设备必须至少留出 32 MiB 给渲染，超大堆设备 也不能把预算抬到失控（上限 96 MiB）。
  */
 class PageBitmapCacheBudgetTest {
 

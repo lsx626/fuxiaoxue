@@ -8,6 +8,7 @@
 3. 残留 .part 是登录页时，续传拼接出的坏文件必须被识别并清除。
 4. 416 越界时丢弃残留 .part 重试，而不是陷入永久失败。
 """
+
 from __future__ import annotations
 
 import os
@@ -19,7 +20,10 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 from fudan_sync.downloader import (  # noqa: E402
-    DownloadTask, Downloader, _is_auth_redirect, _is_html_target,
+    Downloader,
+    DownloadTask,
+    _is_auth_redirect,
+    _is_html_target,
     _looks_like_auth_page,
 )
 
@@ -29,8 +33,9 @@ SIGNED_URL = "https://signed.example/files/1/download"
 
 
 class FakeResponse:
-    def __init__(self, status_code=200, url="", content=FILE_BODY,
-                 content_length=None, headers=None):
+    def __init__(
+        self, status_code=200, url="", content=FILE_BODY, content_length=None, headers=None
+    ):
         self.status_code = status_code
         self.url = url
         self._content = content
@@ -42,12 +47,13 @@ class FakeResponse:
     def raise_for_status(self):
         if 400 <= self.status_code:
             from requests import HTTPError
+
             raise HTTPError(f"{self.status_code} Client Error for url: {self.url}")
 
     def iter_content(self, chunk_size):
         data = self._content
         for i in range(0, len(data), chunk_size):
-            yield data[i:i + chunk_size]
+            yield data[i : i + chunk_size]
 
     def close(self):
         self.closed = True
@@ -65,7 +71,7 @@ class FakeApiSession:
 
     def __init__(self, download_resp_factory):
         self.download_resp_factory = download_resp_factory
-        self.get_calls = []   # (url, kwargs)
+        self.get_calls = []  # (url, kwargs)
         self.cookies = "session-cookie-present"
 
     def get(self, url, **kwargs):
@@ -98,9 +104,14 @@ class _JsonResponse:
 
 def _make_task(dest_dir: str, size: int = len(FILE_BODY)) -> DownloadTask:
     return DownloadTask(
-        file_id=1, course_id=1, filename="a.pdf", folder_path="",
-        course_dir=dest_dir, size=size,
-        api_path="/courses/1/files/1", fallback_url="https://invalid/a.pdf",
+        file_id=1,
+        course_id=1,
+        filename="a.pdf",
+        folder_path="",
+        course_directory=dest_dir,
+        size=size,
+        api_path="/courses/1/files/1",
+        fallback_url="https://invalid/a.pdf",
     )
 
 
@@ -111,14 +122,20 @@ class DownloadSessionTests(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
 
     def _make_downloader(self, session):
-        return Downloader(api_session=session, api_base="https://elearning.test",
-                          max_retries=2, logger=MagicMock())
+        return Downloader(
+            api_session=session,
+            api_base="https://elearning.test",
+            max_retries=2,
+            logger=MagicMock(),
+        )
 
     def test_download_uses_api_session_with_cookies(self):
         """文件内容下载必须走 api_session（携带 Cookie）。"""
         session = FakeApiSession(
-            lambda url, kw: FakeResponse(200, url=SIGNED_URL, content=FILE_BODY,
-                                         content_length=len(FILE_BODY)))
+            lambda url, kw: FakeResponse(
+                200, url=SIGNED_URL, content=FILE_BODY, content_length=len(FILE_BODY)
+            )
+        )
         downloader = self._make_downloader(session)
         result = downloader._download_one(_make_task(self.tmp))
 
@@ -127,12 +144,12 @@ class DownloadSessionTests(unittest.TestCase):
         self.assertEqual(len(download_calls), 1, "必须通过 api_session 下载文件内容")
         # 第一次是换取下载地址的元数据请求，第二次才是文件内容下载
         self.assertIn("/courses/1/files/1", session.get_calls[0][0])
-        self.assertTrue(all(c[1].get("stream") for c in download_calls),
-                        "文件下载必须是流式请求")
+        self.assertTrue(all(c[1].get("stream") for c in download_calls), "文件下载必须是流式请求")
 
     def test_bare_requests_not_used(self):
         """不得使用模块级 requests.get（不带 Cookie，会被重定向到登录页）。"""
         import requests as requests_mod
+
         original = requests_mod.get
         raised = []
 
@@ -142,8 +159,10 @@ class DownloadSessionTests(unittest.TestCase):
 
         requests_mod.get = tripwire
         session = FakeApiSession(
-            lambda url, kw: FakeResponse(200, url=SIGNED_URL, content=FILE_BODY,
-                                         content_length=len(FILE_BODY)))
+            lambda url, kw: FakeResponse(
+                200, url=SIGNED_URL, content=FILE_BODY, content_length=len(FILE_BODY)
+            )
+        )
         try:
             downloader = self._make_downloader(session)
             result = downloader._download_one(_make_task(self.tmp))
@@ -156,54 +175,56 @@ class DownloadSessionTests(unittest.TestCase):
         """会话过期被重定向到 UIS 登录页时，不得把登录页存成目标文件。"""
         session = FakeApiSession(
             lambda url, kw: FakeResponse(
-                200, url="https://id.fudan.edu.cn/ac/#/index?lck=context_CAS_x",
-                content=AUTH_HTML, content_length=len(AUTH_HTML)))
+                200,
+                url="https://id.fudan.edu.cn/ac/#/index?lck=context_CAS_x",
+                content=AUTH_HTML,
+                content_length=len(AUTH_HTML),
+            )
+        )
         downloader = self._make_downloader(session)
 
         task = _make_task(self.tmp)
         result = downloader._download_one(task)
         self.assertFalse(result.success, "登录页不得被判为成功")
         self.assertNotEqual(result.bytes, len(AUTH_HTML), "不得把登录页字节数当作下载量")
-        self.assertFalse(os.path.exists(task.dest_path), "登录页不得落盘为目标文件")
-        self.assertFalse(os.path.exists(f"{task.dest_path}.part"), "登录页不得残留为 .part")
+        self.assertFalse(os.path.exists(task.destination_path), "登录页不得落盘为目标文件")
+        self.assertFalse(os.path.exists(f"{task.destination_path}.part"), "登录页不得残留为 .part")
 
     def test_stale_part_with_auth_page_is_purged(self):
         """残留 .part 是登录页、且服务器接受 Range 时，拼接出的坏文件必须被清除。"""
         task = _make_task(self.tmp)
-        os.makedirs(os.path.dirname(task.dest_path), exist_ok=True)
-        with open(f"{task.dest_path}.part", "wb") as handle:
+        os.makedirs(os.path.dirname(task.destination_path), exist_ok=True)
+        with open(f"{task.destination_path}.part", "wb") as handle:
             handle.write(AUTH_HTML)
 
         def factory(url, kw):
             # 服务器接受 Range，只返回后半段真实内容 -> 与登录页拼接受损
             start = kw.get("headers", {}).get("Range")
             if start and start.startswith("bytes="):
-                tail = FILE_BODY[len(AUTH_HTML):]
-                return FakeResponse(206, url=url, content=tail,
-                                    content_length=len(tail))
-            return FakeResponse(200, url=url, content=FILE_BODY,
-                                content_length=len(FILE_BODY))
+                tail = FILE_BODY[len(AUTH_HTML) :]
+                return FakeResponse(206, url=url, content=tail, content_length=len(tail))
+            return FakeResponse(200, url=url, content=FILE_BODY, content_length=len(FILE_BODY))
 
         session = FakeApiSession(factory)
         downloader = self._make_downloader(session)
         result = downloader._download_one(task)
 
         # 关键不变量：即使最终成功，落盘文件也绝不能以登录页 HTML 开头
-        if os.path.exists(task.dest_path):
-            with open(task.dest_path, "rb") as handle:
+        if os.path.exists(task.destination_path):
+            with open(task.destination_path, "rb") as handle:
                 head = handle.read(len(AUTH_HTML) + 16)
-            self.assertFalse(head.startswith(b"<!DOCTYPE html"),
-                             "目标文件不得以登录页 HTML 开头")
+            self.assertFalse(head.startswith(b"<!DOCTYPE html"), "目标文件不得以登录页 HTML 开头")
         if result.success:
             # 重试成功后残留 .part 应已被原子改名清掉
-            self.assertFalse(os.path.exists(f"{task.dest_path}.part"),
-                             "成功后 .part 必须已被改名清除")
+            self.assertFalse(
+                os.path.exists(f"{task.destination_path}.part"), "成功后 .part 必须已被改名清除"
+            )
 
     def test_416_resets_part_and_retries(self):
         """416 越界时应丢弃 .part 重试，而不是反复失败。"""
         task = _make_task(self.tmp)
-        os.makedirs(os.path.dirname(task.dest_path), exist_ok=True)
-        with open(f"{task.dest_path}.part", "wb") as handle:
+        os.makedirs(os.path.dirname(task.destination_path), exist_ok=True)
+        with open(f"{task.destination_path}.part", "wb") as handle:
             handle.write(b"\x00" * 999)  # 比 task.size 大，触发异常 .part
 
         calls = {"n": 0}
@@ -212,8 +233,7 @@ class DownloadSessionTests(unittest.TestCase):
             calls["n"] += 1
             if calls["n"] == 1:
                 return FakeResponse(416, url=url)
-            return FakeResponse(200, url=url, content=FILE_BODY,
-                                content_length=len(FILE_BODY))
+            return FakeResponse(200, url=url, content=FILE_BODY, content_length=len(FILE_BODY))
 
         session = FakeApiSession(factory)
         downloader = self._make_downloader(session)
@@ -224,10 +244,14 @@ class DownloadSessionTests(unittest.TestCase):
 
 class AuthPageHelperTests(unittest.TestCase):
     def test_is_auth_redirect_detects_uis(self):
-        self.assertTrue(_is_auth_redirect(
-            FakeResponse(200, url="https://id.fudan.edu.cn/ac/#/index?lck=x")))
-        self.assertFalse(_is_auth_redirect(
-            FakeResponse(200, url="https://elearning.fudan.edu.cn/files/1/download")))
+        self.assertTrue(
+            _is_auth_redirect(FakeResponse(200, url="https://id.fudan.edu.cn/ac/#/index?lck=x"))
+        )
+        self.assertFalse(
+            _is_auth_redirect(
+                FakeResponse(200, url="https://elearning.fudan.edu.cn/files/1/download")
+            )
+        )
 
     def test_looks_like_auth_page(self):
         tmp = tempfile.mkdtemp()
@@ -254,8 +278,12 @@ class AuthFailureCircuitBreakerTests(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
 
     def _make_downloader(self, session):
-        return Downloader(api_session=session, api_base="https://elearning.test",
-                          max_retries=5, logger=MagicMock())
+        return Downloader(
+            api_session=session,
+            api_base="https://elearning.test",
+            max_retries=5,
+            logger=MagicMock(),
+        )
 
     def test_403_is_not_retried_and_names_locked_files(self):
         calls = {"n": 0}
@@ -295,8 +323,9 @@ class AuthFailureCircuitBreakerTests(unittest.TestCase):
 
         def factory(url, kw):
             calls["n"] += 1
-            return FakeResponse(200, url=SIGNED_URL, content=AUTH_HTML,
-                                content_length=len(AUTH_HTML))
+            return FakeResponse(
+                200, url=SIGNED_URL, content=AUTH_HTML, content_length=len(AUTH_HTML)
+            )
 
         session = FakeApiSession(factory)
         downloader = self._make_downloader(session)
@@ -312,19 +341,34 @@ class LockedFileStateTests(unittest.TestCase):
 
     def test_mark_locked_keeps_row_with_reason(self):
         import shutil as _shutil
+
         from fudan_sync.state import StateStore
+
         tmp = tempfile.mkdtemp()
         try:
             db = os.path.join(tmp, "state.db")
             store = StateStore(db)
-            store.upsert_file({
-                "file_id": 101, "course_id": 7, "filename": "答案.py",
-                "display_name": "答案.py", "size": 1024, "content_type": "",
-                "folder_id": None, "folder_path": "", "created_at": "",
-                "updated_at": "", "modified_at": "", "locked_for_user": 1,
-                "hidden": 0, "source": "files", "context": "",
-                "local_path": os.path.join(tmp, "答案.py"), "extra": "",
-            })
+            store.upsert_file(
+                {
+                    "file_id": 101,
+                    "course_id": 7,
+                    "filename": "答案.py",
+                    "display_name": "答案.py",
+                    "size": 1024,
+                    "content_type": "",
+                    "folder_id": None,
+                    "folder_path": "",
+                    "created_at": "",
+                    "updated_at": "",
+                    "modified_at": "",
+                    "locked_for_user": 1,
+                    "hidden": 0,
+                    "source": "files",
+                    "context": "",
+                    "local_path": os.path.join(tmp, "答案.py"),
+                    "extra": "",
+                }
+            )
             store.mark_locked(101, "教师已锁定，暂不开放下载")
             rows = store.list_files_by_course(7)
             self.assertEqual(len(rows), 1, "锁定文件必须留在列表里")

@@ -1,4 +1,5 @@
 """后台线程：登录与同步，避免阻塞界面。"""
+
 from __future__ import annotations
 
 import logging
@@ -10,16 +11,18 @@ from PySide6.QtCore import QThread, Signal
 from ..auth import AuthError, CookieAuth, build_auth
 from ..canvas_api import CanvasAPI
 from ..config import ensure_runtime_dirs
-from ..password_login import (PasswordLoginError, has_stored_password,  # noqa: F401
-                              load_password, login_and_save)
+from ..password_login import (
+    PasswordLoginError,
+    has_stored_password,  # noqa: F401
+    login_and_save,
+)
 from ..state import StateStore
 from ..sync_engine import SyncEngine
 
 
 def _to_dict(obj) -> dict:
     if is_dataclass(obj):
-        return {k: (list(v) if isinstance(v, tuple) else v)
-                for k, v in asdict(obj).items()}
+        return {k: (list(v) if isinstance(v, tuple) else v) for k, v in asdict(obj).items()}
     return dict(obj) if obj else {}
 
 
@@ -40,8 +43,8 @@ class GuiLogHandler(logging.Handler):
 class LoginWorker(QThread):
     """首次登录：账号密码 -> 保存 -> 验证 -> 回写配置。"""
 
-    succeeded = Signal(dict)          # 当前用户信息
-    failed = Signal(str, bool)        # (错误信息, 是否需要验证码)
+    succeeded = Signal(dict)  # 当前用户信息
+    failed = Signal(str, bool)  # (错误信息, 是否需要验证码)
     log = Signal(str, str)
 
     def __init__(self, cfg, username: str, password: str, remember: bool = True):
@@ -58,8 +61,13 @@ class LoginWorker(QThread):
         logger.setLevel(logging.DEBUG)
         logger.propagate = False
         try:
-            login_and_save(self.cfg.base_url, self.username, self.password,
-                           self.cfg.cookie_file, store_credentials=self.remember)
+            login_and_save(
+                self.cfg.base_url,
+                self.username,
+                self.password,
+                self.cfg.cookie_file,
+                store_credentials=self.remember,
+            )
             # 登录已把会话 cookie 落盘，直接用 cookie 验证用户信息。
             # 不能调 build_auth(self.cfg)：首次登录时配置里 method 还是空的，
             # load_config 会把它回退成默认的 "token"，于是走到 TokenAuth("") 抛
@@ -72,12 +80,14 @@ class LoginWorker(QThread):
                 return
             # 立刻把认证方式持久化为密码登录，之后启动即可静默登录。
             self._persist_auth_method()
-            self.succeeded.emit({
-                "name": user.get("name") or user.get("short_name") or self.username,
-                "id": user.get("id"),
-                "username": self.username,
-                "remember": self.remember,
-            })
+            self.succeeded.emit(
+                {
+                    "name": user.get("name") or user.get("short_name") or self.username,
+                    "id": user.get("id"),
+                    "username": self.username,
+                    "remember": self.remember,
+                }
+            )
         except PasswordLoginError as exc:
             self.failed.emit(str(exc), exc.need_captcha)
         except Exception as exc:  # pylint: disable=broad-except
@@ -92,12 +102,16 @@ class LoginWorker(QThread):
         复用本次登录已保存的会话。两者都记下账号名，方便界面展示。
         """
         from .config_io import update_config
+
         method = "password" if self.remember else "cookie"
         try:
-            update_config(self.cfg.config_path, [
-                (("auth", "method"), method),
-                (("auth", "uis_username"), self.username),
-            ])
+            update_config(
+                self.cfg.config_path,
+                [
+                    (("auth", "method"), method),
+                    (("auth", "uis_username"), self.username),
+                ],
+            )
             self.cfg.auth_method = method
             self.cfg.uis_username = self.username
         except OSError:
@@ -123,8 +137,7 @@ class SilentLoginWorker(QThread):
             # 认证方式的自动回退（老配置 method 缺失 => password）与持久化
             # 统一交给 build_auth 处理，这里只做"是否有可用凭据"的预判。
             if method in ("", "token") and not token:
-                if not (self.cfg.uis_username
-                        and has_stored_password(self.cfg.uis_username)):
+                if not (self.cfg.uis_username and has_stored_password(self.cfg.uis_username)):
                     self.failed.emit("尚未配置登录凭据，请先登录")
                     return
             auth = build_auth(self.cfg)
@@ -133,10 +146,12 @@ class SilentLoginWorker(QThread):
             if not user.get("id"):
                 self.failed.emit("登录已过期，请重新登录")
                 return
-            self.succeeded.emit({
-                "name": user.get("name") or user.get("short_name") or self.cfg.uis_username,
-                "id": user.get("id"),
-            })
+            self.succeeded.emit(
+                {
+                    "name": user.get("name") or user.get("short_name") or self.cfg.uis_username,
+                    "id": user.get("id"),
+                }
+            )
         except (AuthError, PasswordLoginError) as exc:
             self.failed.emit(str(exc))
         except Exception as exc:  # pylint: disable=broad-except
@@ -181,8 +196,13 @@ class SyncWorker(QThread):
             auth = build_auth(self.cfg)
             api = CanvasAPI(self.cfg.base_url, auth, logger=logger)
             self._state = StateStore(self.cfg.state_db, logger=logger)
-            self._engine = SyncEngine(self.cfg, api, self._state, logger=logger,
-                                      progress_cb=lambda kind, payload: self.progress.emit(kind, payload))
+            self._engine = SyncEngine(
+                self.cfg,
+                api,
+                self._state,
+                logger=logger,
+                progress_cb=lambda kind, payload: self.progress.emit(kind, payload),
+            )
             stats = self._engine.run(full=self.full, course_ids=self.course_ids)
             self.finished_ok.emit(_to_dict(stats))
         except (AuthError, PasswordLoginError) as exc:

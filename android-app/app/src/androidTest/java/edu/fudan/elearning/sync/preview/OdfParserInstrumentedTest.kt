@@ -2,35 +2,36 @@ package edu.fudan.elearning.sync.preview
 
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
-import org.junit.Test
-import org.junit.runner.RunWith
 import java.io.File
 import java.io.FileOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
 
 /**
  * ODF 解析器插桩测试（v1.1.2 新增）。
  *
- * 为什么必须插桩：`XmlPullParserFactory`/`BitmapFactory` 都是平台组件，
- * JVM 单测里没有。夹具是手工构造的最小 .odt zip（content.xml + 一张
- * 1×1 PNG），覆盖标题分级、段落、列表、表格与内嵌图片五类块。
+ * 为什么必须插桩：`XmlPullParserFactory`/`BitmapFactory` 都是平台组件， JVM 单测里没有。夹具是手工构造的最小 .odt
+ * zip（content.xml + 一张 1×1 PNG），覆盖标题分级、段落、列表、表格与内嵌图片五类块。
  */
 @RunWith(AndroidJUnit4::class)
 class OdfParserInstrumentedTest {
 
     private fun fixtureDir(): File {
-        val dir = File(ApplicationProvider.getApplicationContext<android.content.Context>().cacheDir, "odf-fixture")
+        val dir =
+            File(
+                ApplicationProvider.getApplicationContext<android.content.Context>().cacheDir,
+                "odf-fixture",
+            )
         if (!dir.exists()) dir.mkdirs()
         return dir
     }
 
     /** 1×1 透明 PNG 的最小字节。 */
-    private val tinyPng = byteArrayOf(
-        0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A
-    )
+    private val tinyPng = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
 
     /** 构造一个最小 ODF；includeImage 决定是否放内嵌图片。 */
     private fun buildOdt(name: String, includeImage: Boolean): File {
@@ -39,10 +40,11 @@ class OdfParserInstrumentedTest {
             zip.putNextEntry(ZipEntry("mimetype"))
             zip.write("application/vnd.oasis.opendocument.text".toByteArray())
             zip.closeEntry()
-            val imageXml = if (includeImage) {
-                """<draw:frame><draw:image xlink:href="#Pictures/1000.png" """ +
-                    """xlink:type="simple"/></draw:frame>"""
-            } else ""
+            val imageXml =
+                if (includeImage) {
+                    """<draw:frame><draw:image xlink:href="#Pictures/1000.png" """ +
+                        """xlink:type="simple"/></draw:frame>"""
+                } else ""
             zip.putNextEntry(ZipEntry("content.xml"))
             zip.write(
                 """<?xml version="1.0" encoding="UTF-8"?>
@@ -73,7 +75,8 @@ class OdfParserInstrumentedTest {
                             </table:table>
                         </office:text>
                     </office:body>
-                </office:document-content>""".toByteArray()
+                </office:document-content>"""
+                    .toByteArray()
             )
             zip.closeEntry()
             if (includeImage) {
@@ -104,10 +107,7 @@ class OdfParserInstrumentedTest {
 
         val tables = blocks.filterIsInstance<OdfParser.Block.Table>()
         assertEquals(1, tables.size)
-        assertEquals(
-            listOf(listOf("A1", "B1"), listOf("A2", "B2")),
-            tables[0].rows
-        )
+        assertEquals(listOf(listOf("A1", "B1"), listOf("A2", "B2")), tables[0].rows)
 
         // 内嵌图片按出现位置（第二段之后）收集；tinyPng 不可解码为位图，
         // 但字节本身要原样读出（渲染层会兜底「无法解码」文案）

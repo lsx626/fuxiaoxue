@@ -12,19 +12,29 @@ class SyncPolicyTest {
     private fun record(
         status: String = "downloaded",
         size: Long = 100,
-        updatedAt: String = "2026-09-01T10:00:00Z"
-    ) = FileItem(
-        fileId = 1L, courseId = 2L, name = "讲义.pdf", filename = "讲义.pdf",
-        localPath = "/tmp/讲义.pdf", size = size, status = status, updatedAt = updatedAt
-    )
+        updatedAt: String = "2026-09-01T10:00:00Z",
+    ) =
+        FileItem(
+            fileId = 1L,
+            courseId = 2L,
+            name = "讲义.pdf",
+            filename = "讲义.pdf",
+            localPath = "/tmp/讲义.pdf",
+            size = size,
+            status = status,
+            updatedAt = updatedAt,
+        )
 
     @Test
     fun fullSyncAlwaysDownloads() {
         assertTrue(
             SyncPolicy.shouldDownload(
-                full = true, record = record(), remoteSize = 100,
+                full = true,
+                record = record(),
+                remoteSize = 100,
                 remoteUpdatedAt = "2026-09-01T10:00:00Z",
-                localExists = true, localLength = 100
+                localExists = true,
+                localLength = 100,
             )
         )
     }
@@ -40,9 +50,12 @@ class SyncPolicyTest {
     fun unchangedDownloadedFileIsSkipped() {
         assertFalse(
             SyncPolicy.shouldDownload(
-                full = false, record = record(), remoteSize = 100,
+                full = false,
+                record = record(),
+                remoteSize = 100,
                 remoteUpdatedAt = "2026-09-01T10:00:00Z",
-                localExists = true, localLength = 100
+                localExists = true,
+                localLength = 100,
             )
         )
     }
@@ -62,28 +75,29 @@ class SyncPolicyTest {
     fun remoteUpdatedAtMissingOnRecordDoesNotForceRedownload() {
         // 旧数据库记录没有 updated_at（迁移前），远端有：应视为变化并重下
         val legacy = record(updatedAt = "")
-        assertTrue(
-            SyncPolicy.shouldDownload(false, legacy, 100, "2026-09-01T10:00:00Z", true, 100)
-        )
+        assertTrue(SyncPolicy.shouldDownload(false, legacy, 100, "2026-09-01T10:00:00Z", true, 100))
         // 远端没有该字段时不能用空值逼迫全量重下
         assertFalse(SyncPolicy.shouldDownload(false, record(), 100, "", true, 100))
     }
 
     @Test
-    fun remoteMissingRequiresSuccessfulListing() {
+    fun removalRequiresSuccessfulListing() {
         val existing = listOf(record().copy(fileId = 1), record().copy(fileId = 2))
 
-        assertTrue(SyncPolicy.remoteMissingIds(existing, setOf(1L), listingSucceeded = false).isEmpty())
+        assertTrue(SyncPolicy.removedIds(existing, setOf(1L), listingSucceeded = false).isEmpty())
         assertEquals(
             listOf(2L),
-            SyncPolicy.remoteMissingIds(existing, setOf(1L), listingSucceeded = true)
+            SyncPolicy.removedIds(existing, setOf(1L), listingSucceeded = true),
         )
     }
 
     @Test
-    fun alreadyMissingRecordsAreNotRepeated() {
-        val existing = listOf(record().copy(fileId = 2, status = SyncPolicy.STATUS_REMOTE_MISSING))
-        assertTrue(SyncPolicy.remoteMissingIds(existing, emptySet(), listingSucceeded = true).isEmpty())
+    fun legacyMissingRecordsArePurgedOnNextCompleteListing() {
+        val existing = listOf(record().copy(fileId = 2, status = "remote_missing"))
+        assertEquals(
+            listOf(2L),
+            SyncPolicy.removedIds(existing, emptySet(), listingSucceeded = true),
+        )
     }
 
     @Test

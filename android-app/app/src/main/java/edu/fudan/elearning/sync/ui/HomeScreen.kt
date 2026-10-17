@@ -33,100 +33,229 @@ fun HomeScreen(viewModel: AppViewModel, sharedSnackbars: SnackbarHostState? = nu
     var confirmFull by rememberSaveable { mutableStateOf(false) }
     val localSnackbars = remember { SnackbarHostState() }
     val snackbars = sharedSnackbars ?: localSnackbars
-    if (sharedSnackbars == null) LaunchedEffect(viewModel) { viewModel.messages.collect { snackbars.showSnackbar(it) } }
+    if (sharedSnackbars == null)
+        LaunchedEffect(viewModel) { viewModel.messages.collect { snackbars.showSnackbar(it) } }
     BackHandler(course != null) { viewModel.clearCourseSelection() }
 
-    fun selectTab(next: LibraryTab) { viewModel.clearCourseSelection(); tab = next }
-    val labels = listOf(R.string.nav_courses, R.string.nav_activity, R.string.nav_storage, R.string.nav_settings)
-    val titles = listOf(R.string.screen_courses, R.string.screen_activity, R.string.screen_storage, R.string.screen_settings)
+    fun selectTab(next: LibraryTab) {
+        viewModel.clearCourseSelection()
+        tab = next
+    }
+    val labels =
+        listOf(
+            R.string.nav_courses,
+            R.string.nav_activity,
+            R.string.nav_storage,
+            R.string.nav_settings,
+        )
+    val titles =
+        listOf(
+            R.string.screen_courses,
+            R.string.screen_activity,
+            R.string.screen_storage,
+            R.string.screen_settings,
+        )
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val wide = maxWidth >= 720.dp
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             topBar = {
                 TopAppBar(
-                    title = { Text(if (course == null) stringResource(titles[tab.ordinal]) else stringResource(R.string.screen_courses),
-                        style = MaterialTheme.typography.titleLarge) },
+                    title = {
+                        Text(
+                            if (course == null) stringResource(titles[tab.ordinal])
+                            else stringResource(R.string.screen_courses),
+                            style = MaterialTheme.typography.titleLarge,
+                        )
+                    },
                     navigationIcon = {
-                        if (course != null) IconButton(onClick = viewModel::clearCourseSelection) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.search_back))
-                        } else Box(Modifier.padding(start = 20.dp, end = 8.dp)) {
-                            Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.primary) {
-                                Icon(painterResource(R.drawable.ic_school), null, Modifier.padding(7.dp).size(20.dp),
-                                    tint = MaterialTheme.colorScheme.onPrimary)
+                        if (course != null)
+                            IconButton(onClick = viewModel::clearCourseSelection) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    stringResource(R.string.search_back),
+                                )
                             }
-                        }
+                        else
+                            Box(Modifier.padding(start = 20.dp, end = 10.dp)) {
+                                Surface(
+                                    shape = MaterialTheme.shapes.small,
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                ) {
+                                    Icon(
+                                        painterResource(R.drawable.ic_brand_mark),
+                                        null,
+                                        Modifier.padding(8.dp).size(22.dp),
+                                        tint = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                            }
                     },
                     actions = {
-                        IconButton(onClick = viewModel::openSearch) { Icon(Icons.Default.Search, stringResource(R.string.search_open)) }
+                        IconButton(onClick = viewModel::openSearch) {
+                            Icon(Icons.Default.Search, stringResource(R.string.search_open))
+                        }
                         Box {
-                            IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, stringResource(R.string.menu_more)) }
+                            IconButton(onClick = { menu = true }) {
+                                Icon(Icons.Default.MoreVert, stringResource(R.string.menu_more))
+                            }
                             DropdownMenu(menu, onDismissRequest = { menu = false }) {
-                                DropdownMenuItem(text = { Text(stringResource(R.string.action_refresh)) },
-                                    onClick = { menu = false; viewModel.refreshCourses() })
-                                DropdownMenuItem(text = { Text(stringResource(R.string.sync_title)) },
-                                    onClick = { menu = false; showSync = true })
-                                DropdownMenuItem(text = { Text(stringResource(R.string.menu_sync_full)) }, enabled = !busy,
-                                    onClick = { menu = false; confirmFull = true })
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.action_refresh)) },
+                                    onClick = {
+                                        menu = false
+                                        viewModel.refreshLibrary()
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.sync_title)) },
+                                    onClick = {
+                                        menu = false
+                                        showSync = true
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.menu_sync_full)) },
+                                    enabled = !busy,
+                                    onClick = {
+                                        menu = false
+                                        confirmFull = true
+                                    },
+                                )
                             }
                         }
                     },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
+                    colors =
+                        TopAppBarDefaults.topAppBarColors(
+                            containerColor = MaterialTheme.colorScheme.background,
+                            titleContentColor = MaterialTheme.colorScheme.onBackground,
+                        ),
                 )
             },
             bottomBar = {
-                if (course != null) Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 2.dp) {
-                    Button(onClick = { if (syncing || busy) showSync = true else viewModel.sync() },
-                        modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 8.dp)) {
-                        if (syncing) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary)
-                        else Icon(Icons.Default.Refresh, null, Modifier.size(20.dp))
-                        Spacer(Modifier.width(10.dp))
-                        Text(stringResource(if (syncing) R.string.sync_running else if (busy) R.string.sync_detail else R.string.action_sync))
+                if (course != null)
+                    Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 2.dp) {
+                        Button(
+                            onClick = {
+                                if (syncing || busy) showSync = true else viewModel.sync()
+                            },
+                            modifier =
+                                Modifier.fillMaxWidth()
+                                    .navigationBarsPadding()
+                                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                        ) {
+                            if (syncing)
+                                CircularProgressIndicator(
+                                    Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                )
+                            else Icon(Icons.Default.Refresh, null, Modifier.size(20.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                stringResource(
+                                    if (syncing) R.string.sync_running
+                                    else if (busy) R.string.sync_detail else R.string.action_sync
+                                )
+                            )
+                        }
                     }
-                }
-                else if (!wide) NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                    LibraryTab.entries.forEach { item -> NavigationBarItem(
-                        selected = tab == item, onClick = { selectTab(item) }, modifier = Modifier.testTag("tab-${item.name}"),
-                        icon = { TabIcon(item) }, label = { Text(stringResource(labels[item.ordinal])) }) }
-                }
+                else if (!wide)
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 3.dp,
+                    ) {
+                        LibraryTab.entries.forEach { item ->
+                            NavigationBarItem(
+                                selected = tab == item,
+                                onClick = { selectTab(item) },
+                                modifier = Modifier.testTag("tab-${item.name}"),
+                                icon = { TabIcon(item) },
+                                label = { Text(stringResource(labels[item.ordinal])) },
+                            )
+                        }
+                    }
             },
             snackbarHost = { if (sharedSnackbars == null) SnackbarHost(snackbars) },
             floatingActionButton = {
-                if (course == null && tab == LibraryTab.COURSES) ExtendedFloatingActionButton(
-                    onClick = { if (syncing || busy) showSync = true else viewModel.sync() },
-                    icon = { if (syncing) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                        else Icon(Icons.Default.Refresh, null) },
-                    text = { Text(stringResource(if (syncing) R.string.sync_running else R.string.action_sync)) },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                    elevation = FloatingActionButtonDefaults.elevation(2.dp)
-                )
-            }
+                if (course == null && tab == LibraryTab.COURSES)
+                    ExtendedFloatingActionButton(
+                        onClick = { if (syncing || busy) showSync = true else viewModel.sync() },
+                        icon = {
+                            if (syncing)
+                                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                            else Icon(Icons.Default.Refresh, null)
+                        },
+                        text = {
+                            Text(
+                                stringResource(
+                                    if (syncing) R.string.sync_running else R.string.action_sync
+                                )
+                            )
+                        },
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                        elevation = FloatingActionButtonDefaults.elevation(2.dp),
+                    )
+            },
         ) { padding ->
             Row(Modifier.fillMaxSize().padding(padding)) {
-                if (wide) NavigationRail(containerColor = MaterialTheme.colorScheme.background) {
-                    Spacer(Modifier.height(12.dp))
-                    LibraryTab.entries.forEach { item -> NavigationRailItem(
-                        selected = tab == item, onClick = { selectTab(item) }, modifier = Modifier.testTag("tab-${item.name}"),
-                        icon = { TabIcon(item) }, label = { Text(stringResource(labels[item.ordinal])) }) }
-                }
-                Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+                if (wide)
+                    NavigationRail(containerColor = MaterialTheme.colorScheme.background) {
+                        Spacer(Modifier.height(12.dp))
+                        LibraryTab.entries.forEach { item ->
+                            NavigationRailItem(
+                                selected = tab == item,
+                                onClick = { selectTab(item) },
+                                modifier = Modifier.testTag("tab-${item.name}"),
+                                icon = { TabIcon(item) },
+                                label = { Text(stringResource(labels[item.ordinal])) },
+                            )
+                        }
+                    }
+                Column(
+                    Modifier.weight(1f).fillMaxHeight(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
                     Column(Modifier.widthIn(max = 1120.dp).fillMaxSize()) {
                         if (syncing || busy || progress.phase in listOf("done", "stopped")) {
-                            SyncStatusStrip(progress, syncing, busy, { showSync = true }, viewModel::markSyncDoneSeen)
+                            SyncStatusStrip(
+                                progress,
+                                syncing,
+                                busy,
+                                { showSync = true },
+                                viewModel::markSyncDoneSeen,
+                            )
                         }
-                        if (syncError != null || needsReauth) Box(Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
-                            Notice(syncError ?: stringResource(R.string.offline_notice),
-                                action = stringResource(if (needsReauth) R.string.action_sign_in else R.string.action_retry),
-                                onAction = { if (needsReauth) viewModel.requestReauth() else viewModel.sync() },
-                                onDismiss = if (!needsReauth) viewModel::clearSyncError else null, error = syncError != null)
-                        }
-                        if (operationError != null) Box(Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
-                            Notice(operationError!!, onDismiss = viewModel::clearOperationError, error = true)
-                        }
+                        if (syncError != null || needsReauth)
+                            Box(Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
+                                Notice(
+                                    syncError ?: stringResource(R.string.offline_notice),
+                                    action =
+                                        stringResource(
+                                            if (needsReauth) R.string.action_sign_in
+                                            else R.string.action_retry
+                                        ),
+                                    onAction = {
+                                        if (needsReauth) viewModel.requestReauth()
+                                        else viewModel.sync()
+                                    },
+                                    onDismiss =
+                                        if (!needsReauth) viewModel::clearSyncError else null,
+                                    error = syncError != null,
+                                )
+                            }
+                        if (operationError != null)
+                            Box(Modifier.padding(horizontal = 20.dp, vertical = 6.dp)) {
+                                Notice(
+                                    operationError!!,
+                                    onDismiss = viewModel::clearOperationError,
+                                    error = true,
+                                )
+                            }
                         when {
-                            course != null -> key(course!!.course.id) { CourseFilesScreen(viewModel, course!!) }
+                            course != null ->
+                                key(course!!.course.id) { CourseFilesScreen(viewModel, course!!) }
                             tab == LibraryTab.COURSES -> CoursesScreen(viewModel)
                             tab == LibraryTab.ACTIVITY -> ActivityScreen(viewModel)
                             tab == LibraryTab.STORAGE -> StorageScreen(viewModel)
@@ -137,18 +266,35 @@ fun HomeScreen(viewModel: AppViewModel, sharedSnackbars: SnackbarHostState? = nu
             }
         }
     }
-    if (showSync) SyncTaskSheet(viewModel, onDismiss = { showSync = false }, onFullSync = { showSync = false; confirmFull = true })
-    if (confirmFull) ConfirmActionDialog(stringResource(R.string.sync_full_title), stringResource(R.string.sync_full_hint),
-        stringResource(R.string.sync_full_action), onConfirm = { confirmFull = false; viewModel.sync(full = true) },
-        onDismiss = { confirmFull = false }, destructive = false)
+    if (showSync)
+        SyncTaskSheet(
+            viewModel,
+            onDismiss = { showSync = false },
+            onFullSync = {
+                showSync = false
+                confirmFull = true
+            },
+        )
+    if (confirmFull)
+        ConfirmActionDialog(
+            stringResource(R.string.sync_full_title),
+            stringResource(R.string.sync_full_hint),
+            stringResource(R.string.sync_full_action),
+            onConfirm = {
+                confirmFull = false
+                viewModel.sync(full = true)
+            },
+            onDismiss = { confirmFull = false },
+            destructive = false,
+        )
 }
 
 @Composable
 private fun TabIcon(tab: LibraryTab) {
     when (tab) {
-        LibraryTab.COURSES -> Icon(painterResource(R.drawable.ic_school), null)
-        LibraryTab.ACTIVITY -> Icon(Icons.Default.DateRange, null)
-        LibraryTab.STORAGE -> Icon(painterResource(R.drawable.ic_folder), null)
-        LibraryTab.SETTINGS -> Icon(Icons.Default.Settings, null)
+        LibraryTab.COURSES -> Icon(painterResource(R.drawable.ic_nav_library), null)
+        LibraryTab.ACTIVITY -> Icon(painterResource(R.drawable.ic_nav_activity), null)
+        LibraryTab.STORAGE -> Icon(painterResource(R.drawable.ic_nav_storage), null)
+        LibraryTab.SETTINGS -> Icon(painterResource(R.drawable.ic_nav_settings), null)
     }
 }

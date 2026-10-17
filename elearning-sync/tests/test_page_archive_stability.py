@@ -7,6 +7,7 @@
 3. 正文变化时原地覆盖（原子替换），文件名保持不变；
 4. GUI 的「打开课程文件夹」必须复用同步引擎的路径清洗规则。
 """
+
 from __future__ import annotations
 
 import os
@@ -40,7 +41,6 @@ def _make_engine(tmp: str) -> SyncEngine:
 
 
 class PageArchiveStabilityTests(unittest.TestCase):
-
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.engine = _make_engine(self.tmp)

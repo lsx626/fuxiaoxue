@@ -1,4 +1,5 @@
 """认证模块：支持 Canvas API Token、浏览器 Cookie、Playwright 交互式登录."""
+
 from __future__ import annotations
 
 import json
@@ -27,9 +28,9 @@ class BaseAuth:
     def verify(self, session: requests.Session, api_base: str) -> bool:
         """调用 /api/v1/users/self 验证认证是否有效。"""
         try:
-            resp = session.get(f"{api_base}/users/self", timeout=30)
-            if resp.status_code == 200:
-                data = resp.json()
+            response = session.get(f"{api_base}/users/self", timeout=30)
+            if response.status_code == 200:
+                data = response.json()
                 return bool(data.get("id"))
             return False
         except (requests.RequestException, ValueError):
@@ -78,11 +79,13 @@ class CookieAuth(BaseAuth):
                 for pair in raw["cookie_header"].split(";"):
                     if "=" in pair:
                         name, value = pair.strip().split("=", 1)
-                        cookies.append({"name": name, "value": value,
-                                        "domain": "", "path": "/"})
+                        cookies.append({"name": name, "value": value, "domain": "", "path": "/"})
             else:  # 简单 {name: value} 映射
-                cookies = [{"name": str(k), "value": str(v), "domain": "", "path": "/"}
-                           for k, v in raw.items() if v is not None]
+                cookies = [
+                    {"name": str(k), "value": str(v), "domain": "", "path": "/"}
+                    for k, v in raw.items()
+                    if v is not None
+                ]
         else:
             raise AuthError(f"无法识别的 Cookie 文件格式: {self.cookie_file}")
 
@@ -93,7 +96,8 @@ class CookieAuth(BaseAuth):
     def apply(self, session: requests.Session) -> None:
         for cookie in self.cookies:
             session.cookies.set(
-                cookie["name"], cookie["value"],
+                cookie["name"],
+                cookie["value"],
                 domain=cookie.get("domain") or "",
                 path=cookie.get("path") or "/",
             )
@@ -103,8 +107,8 @@ class CookieAuth(BaseAuth):
     def extract_csrf(self, session: requests.Session, base_url: str) -> Optional[str]:
         """从已登录首页 HTML 中提取 CSRF token（提升 API 访问稳定性）。"""
         try:
-            resp = session.get(base_url, timeout=30, allow_redirects=True)
-            match = CSRF_META_RE.search(resp.text or "")
+            response = session.get(base_url, timeout=30, allow_redirects=True)
+            match = CSRF_META_RE.search(response.text or "")
             if match:
                 self.csrf_token = match.group(1)
                 session.headers.update({"X-CSRF-Token": self.csrf_token})
@@ -113,8 +117,9 @@ class CookieAuth(BaseAuth):
         return self.csrf_token
 
 
-def save_cookies(cookie_file: str, cookies: List[Dict[str, Any]],
-                 csrf_token: Optional[str] = None) -> None:
+def save_cookies(
+    cookie_file: str, cookies: List[Dict[str, Any]], csrf_token: Optional[str] = None
+) -> None:
     """保存 cookie（Playwright 格式）到 JSON 文件，并限制文件权限。"""
     payload = {"csrf_token": csrf_token, "saved_at": int(time.time()), "cookies": cookies}
     os.makedirs(os.path.dirname(os.path.abspath(cookie_file)), exist_ok=True)
@@ -128,9 +133,19 @@ def _restrict_file_permissions(path: str) -> None:
     try:
         if os.name == "nt":
             import subprocess
-            subprocess.run(["icacls", path, "/inheritance:r", "/grant:r",
-                            f"{os.environ.get('USERNAME', '')}:F"],
-                           check=False, capture_output=True, timeout=15)
+
+            subprocess.run(
+                [
+                    "icacls",
+                    path,
+                    "/inheritance:r",
+                    "/grant:r",
+                    f"{os.environ.get('USERNAME', '')}:F",
+                ],
+                check=False,
+                capture_output=True,
+                timeout=15,
+            )
         else:
             os.chmod(path, 0o600)
     except Exception:  # pylint: disable=broad-except
@@ -149,6 +164,7 @@ def _persist_method(cfg, method: str) -> None:
         return
     try:
         import yaml  # pylint: disable=import-outside-toplevel
+
         data = {}
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as handle:
@@ -177,6 +193,7 @@ def build_auth(cfg) -> BaseAuth:
     if method in ("", "token") and not token:
         # 没配 token：钥匙串里有密码就走密码登录，并把这个决定持久化
         from .password_login import has_stored_password  # pylint: disable=import-outside-toplevel
+
         username = getattr(cfg, "uis_username", "") or ""
         if username and has_stored_password(username):
             _persist_method(cfg, "password")
@@ -184,7 +201,8 @@ def build_auth(cfg) -> BaseAuth:
         elif method == "token":
             raise AuthError(
                 "尚未配置登录凭据：认证方式为 token 但未设置 token，"
-                "也没有保存的账号密码。请在软件中登录。")
+                "也没有保存的账号密码。请在软件中登录。"
+            )
 
     if method == "token":
         return TokenAuth(token)
@@ -192,7 +210,11 @@ def build_auth(cfg) -> BaseAuth:
         return CookieAuth(cfg.cookie_file)
     if method == "password":
         # 延迟导入，避免与 password_login 模块形成循环导入
-        from .password_login import load_password, login_with_stored_credentials  # pylint: disable=import-outside-toplevel
+        from .password_login import (  # pylint: disable=import-outside-toplevel
+            load_password,
+            login_with_stored_credentials,
+        )
+
         username = getattr(cfg, "uis_username", "") or ""
         cookie_file = getattr(cfg, "cookie_file", "") or "cookies.json"
         # 记住了密码：静默重登，刷新会话，并把方式固化成 password
@@ -206,13 +228,14 @@ def build_auth(cfg) -> BaseAuth:
             _persist_method(cfg, "cookie")
             return CookieAuth(cookie_file)
         raise AuthError(
-            "登录会话已失效且未保存密码，请在软件中重新登录"
-            "（或在登录时勾选“记住密码”）")
+            "登录会话已失效且未保存密码，请在软件中重新登录（或在登录时勾选“记住密码”）"
+        )
     raise AuthError(f"未知认证方式: {method}")
 
 
-def browser_login(base_url: str, cookie_file: str, headless: bool = False,
-                  timeout_seconds: int = 900) -> CookieAuth:
+def browser_login(
+    base_url: str, cookie_file: str, headless: bool = False, timeout_seconds: int = 900
+) -> CookieAuth:
     """启动真实浏览器引导用户完成 UIS 登录，成功后自动保存 Cookie。
 
     需要：pip install playwright && python -m playwright install chromium

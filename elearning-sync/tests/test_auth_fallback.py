@@ -7,6 +7,7 @@
 
 运行：python elearning-sync/tests/test_auth_fallback.py
 """
+
 from __future__ import annotations
 
 import json
@@ -17,18 +18,19 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-import fudan_sync.auth as auth_mod  # noqa: E402
+import fudan_sync.password_login as pl  # noqa: E402
 from fudan_sync.auth import AuthError, CookieAuth, build_auth  # noqa: E402
 from fudan_sync.config import load_config  # noqa: E402
-import fudan_sync.password_login as pl  # noqa: E402
 
 USERNAME = "20300123456"
 
 
 def _write_cookie(cookie_file: str) -> None:
     with open(cookie_file, "w", encoding="utf-8") as handle:
-        json.dump({"cookies": [{"name": "_normandy_session", "value": "x",
-                                "domain": "", "path": "/"}]}, handle)
+        json.dump(
+            {"cookies": [{"name": "_normandy_session", "value": "x", "domain": "", "path": "/"}]},
+            handle,
+        )
 
 
 class AuthFallbackTests(unittest.TestCase):
@@ -54,8 +56,9 @@ class AuthFallbackTests(unittest.TestCase):
         # 模拟钥匙串里存着密码、登录会话可直接建立
         pl.has_stored_password = lambda u: u == USERNAME
         pl.load_password = lambda u: "secret" if u == USERNAME else None
-        pl.login_with_stored_credentials = lambda base, user, cookie: (
-            _write_cookie(cookie), None)[1]
+        pl.login_with_stored_credentials = lambda base, user, cookie: (_write_cookie(cookie), None)[
+            1
+        ]
         return cfg, cfg_path, cookie_file
 
     def test_missing_method_falls_back_to_password_and_persists(self):
@@ -107,12 +110,14 @@ root_dir: ./files
 
     def test_token_method_still_works(self):
         """正常配置 token 的用户不受影响。"""
-        cfg, _cfg_path, _cookie = self._make_cfg(f"""auth:
+        cfg, _cfg_path, _cookie = self._make_cfg("""auth:
   method: token
   token: abc123
 """)
         from fudan_sync.auth import TokenAuth
+
         self.assertIsInstance(build_auth(cfg), TokenAuth)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

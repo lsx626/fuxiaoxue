@@ -12,6 +12,7 @@ SQLite FTS5 默认的 ``unicode61`` 分词器不做中文分词——一整段�
 openpyxl / odfpy），厚此薄彼地解析常见课件格式；旧二进制 .doc/.ppt/.xls
 与图片、音视频不做内容索引（只索引文件名），与预览的降级说明口径一致。
 """
+
 from __future__ import annotations
 
 import os
@@ -19,7 +20,7 @@ import re
 from html.parser import HTMLParser
 from typing import Dict, List, Optional
 
-MAX_INDEX_CHARS = 65536            # 单个文件进入索引的最大字符数
+MAX_INDEX_CHARS = 65536  # 单个文件进入索引的最大字符数
 MAX_READ_BYTES = 16 * 1024 * 1024  # 抽取时最多读取的源字节（避免巨型文件拖垮同步）
 
 # CJK 统一表意文字（含扩展 A、兼容表意）与平假名/片假名：这些区间做多字预分词
@@ -31,10 +32,39 @@ _CJK_RANGES = (
 )
 
 _TEXT_EXTS = {
-    ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".xml", ".log",
-    ".ini", ".cfg", ".yml", ".yaml", ".py", ".js", ".ts", ".java", ".c",
-    ".h", ".cpp", ".hpp", ".cs", ".go", ".rs", ".sql", ".sh", ".bat",
-    ".ps1", ".tex", ".srt", ".vtt", ".toml", ".properties", ".gitignore",
+    ".txt",
+    ".md",
+    ".markdown",
+    ".csv",
+    ".tsv",
+    ".json",
+    ".xml",
+    ".log",
+    ".ini",
+    ".cfg",
+    ".yml",
+    ".yaml",
+    ".py",
+    ".js",
+    ".ts",
+    ".java",
+    ".c",
+    ".h",
+    ".cpp",
+    ".hpp",
+    ".cs",
+    ".go",
+    ".rs",
+    ".sql",
+    ".sh",
+    ".bat",
+    ".ps1",
+    ".tex",
+    ".srt",
+    ".vtt",
+    ".toml",
+    ".properties",
+    ".gitignore",
 }
 _HTML_EXTS = {".html", ".htm", ".xhtml"}
 _OFFICE_XML_EXTS = {".docx": "docx", ".pptx": "pptx", ".xlsx": "xlsx"}
@@ -66,8 +96,8 @@ def tokenize_for_index(text: str) -> str:
             while end < total and _is_cjk(ord(text[end])):
                 end += 1
             run = text[i:end]
-            tokens.extend(run)                              # 单字
-            tokens.extend(run[k:k + 2] for k in range(len(run) - 1))  # 双字
+            tokens.extend(run)  # 单字
+            tokens.extend(run[k : k + 2] for k in range(len(run) - 1))  # 双字
             i = end
         elif char.isalnum():
             end = i
@@ -103,7 +133,7 @@ def build_match_query(query: str) -> Optional[str]:
                 terms.append(run)
             else:
                 terms.extend(run)
-                terms.extend(run[k:k + 2] for k in range(len(run) - 1))
+                terms.extend(run[k : k + 2] for k in range(len(run) - 1))
             i = end
         elif char.isalnum():
             end = i
@@ -214,6 +244,7 @@ def _extract_html(path: str) -> Optional[str]:
 
 def _extract_pdf(path: str) -> Optional[str]:
     import fitz  # noqa: PLC0415 - 懒加载，缺 PyMuPDF 时不影响其它格式
+
     parts: List[str] = []
     length = 0
     with fitz.open(path) as doc:
@@ -235,6 +266,7 @@ def _extract_office_xml(path: str, kind: str) -> Optional[str]:
 
     if kind == "docx":
         import docx  # noqa: PLC0415
+
         document = docx.Document(path)
         for paragraph in document.paragraphs:
             append(paragraph.text)
@@ -244,6 +276,7 @@ def _extract_office_xml(path: str, kind: str) -> Optional[str]:
                     append(cell.text)
     elif kind == "pptx":
         import pptx  # noqa: PLC0415
+
         presentation = pptx.Presentation(path)
         for slide in presentation.slides:
             for shape in slide.shapes:
@@ -255,6 +288,7 @@ def _extract_office_xml(path: str, kind: str) -> Optional[str]:
                             append(cell.text)
     else:  # xlsx
         import openpyxl  # noqa: PLC0415
+
         workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
         try:
             for worksheet in workbook.worksheets:
@@ -270,6 +304,7 @@ def _extract_office_xml(path: str, kind: str) -> Optional[str]:
 def _extract_odf(path: str) -> Optional[str]:
     import odf.opendocument  # noqa: PLC0415
     import odf.teletype  # noqa: PLC0415
+
     document = odf.opendocument.load(path)
     return _truncate(odf.teletype.extractText(document)).strip() or None
 

@@ -6,19 +6,28 @@
 支持导出标准 .ics（CRLF 行尾、UTC TZID），可以导入系统日历或
 Google Calendar；导出失败弹出明确错误，不静默吞掉。
 """
+
 from __future__ import annotations
 
 import datetime
 from typing import List, Optional
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QFileDialog, QLabel,
-                               QListWidget, QListWidgetItem, QMessageBox,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..state import StateStore
 from ..utils import clean_course_name, format_size  # noqa: F401  （保持与其他对话框一致的导入习惯）
-from .styles import (ACCENT, CARD, DANGER, SUCCESS, TEXT, TEXT_SECONDARY, WARNING)
+from .styles import ACCENT, CARD, DANGER, TEXT_SECONDARY, WARNING
 
 
 def _parse_due(value: str) -> Optional[datetime.datetime]:
@@ -66,7 +75,8 @@ class DeadlinesDialog(QDialog):
         self.list_widget.setStyleSheet(
             f"QListWidget {{ background: {CARD}; border: 1px solid #E2E7F1;"
             f" border-radius: 8px; }}"
-            f"QListWidget::item {{ padding: 8px 10px; }}")
+            f"QListWidget::item {{ padding: 8px 10px; }}"
+        )
         layout.addWidget(self.list_widget, 1)
 
         buttons = QDialogButtonBox()
@@ -116,7 +126,8 @@ class DeadlinesDialog(QDialog):
             self.list_widget.addItem(list_item)
         count = len(self._assignments)
         overdue = sum(
-            1 for item in self._assignments
+            1
+            for item in self._assignments
             if _parse_due(item.get("due_at") or "") is not None
             and _parse_due(item.get("due_at") or "") < now
         )
@@ -133,7 +144,8 @@ class DeadlinesDialog(QDialog):
             QMessageBox.information(self, "导出", "没有可导出的作业。")
             return
         target, _ = QFileDialog.getSaveFileName(
-            self, "导出日历", "fuxiaoxue-deadlines.ics", "iCalendar (*.ics)")
+            self, "导出日历", "fuxiaoxue-deadlines.ics", "iCalendar (*.ics)"
+        )
         if not target:
             return
         try:
@@ -148,6 +160,7 @@ class DeadlinesDialog(QDialog):
 
 def _qcolor(token: str):
     from PySide6.QtGui import QColor
+
     return QColor(token)
 
 

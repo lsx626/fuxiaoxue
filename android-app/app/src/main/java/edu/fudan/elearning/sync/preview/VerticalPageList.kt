@@ -1,7 +1,6 @@
 package edu.fudan.elearning.sync.preview
 
 import android.graphics.Bitmap
-import edu.fudan.elearning.sync.R
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -26,21 +25,16 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -51,8 +45,8 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -67,25 +61,25 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import edu.fudan.elearning.sync.R
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.ensureActive
 
 /**
  * 统一的「纵向连续滚动」页面列表（下拉式阅读体验）：PDF、Office 共用。
- *
  * - 每页一个 LazyColumn 条目，进入可视区时才在 IO 线程渲染位图；
  * - 位图走 [PageBitmapCache]（按字节数预算的 LRU），当前展示中的页被钉住不会被回收；
- * - 缩放状态上提到列表级（按页号记忆）：双指缩放（1x~[maxZoom]）、双击以**点击点为锚点**
- *   在 1x/2x 间切换，底部控制条还提供 ± 按钮与百分比，缩放不再只靠手势；
+ * - 缩放状态上提到列表级（按页号记忆）：双指缩放（1x~[maxZoom]）、双击以**点击点为锚点** 在 1x/2x 间切换，底部控制条还提供 ± 按钮与百分比，缩放不再只靠手势；
  * - 底部常驻控制条：跳页 / 回页首 / 缩放 / 重置——滚动时也不会消失；
  * - 页脚显示「第 N / M 页」。
  */
@@ -103,7 +97,7 @@ fun VerticalPageList(
     /** v1.1.2：打开时恢复到的页码（-1 不恢复）。 */
     initialPage: Int = -1,
     /** v1.1.2：主显示页变化时回调（ViewModel 落库阅读进度）。 */
-    onPageChanged: (page: Int, total: Int) -> Unit = { _, _ -> }
+    onPageChanged: (page: Int, total: Int) -> Unit = { _, _ -> },
 ) {
     if (pageCount <= 0) {
         Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -129,9 +123,13 @@ fun VerticalPageList(
     val currentPage by remember {
         derivedStateOf {
             val info = listState.layoutInfo
-            dominantPage(info.visibleItemsInfo.mapNotNull { item ->
-                (item.key as? Int)?.let { VisiblePage(it, item.offset, item.size) }
-            }, info.viewportStartOffset, info.viewportEndOffset)
+            dominantPage(
+                info.visibleItemsInfo.mapNotNull { item ->
+                    (item.key as? Int)?.let { VisiblePage(it, item.offset, item.size) }
+                },
+                info.viewportStartOffset,
+                info.viewportEndOffset,
+            )
         }
     }
 
@@ -145,7 +143,7 @@ fun VerticalPageList(
             listState.scrollToItem(headerOffset + initialPage)
         }
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.any { it.key is Int } }.first { it }
-        withFrameNanos { }
+        withFrameNanos {}
         restored = true
     }
 
@@ -156,16 +154,14 @@ fun VerticalPageList(
             reportPage(currentPage, pageCount)
         }
     }
-    DisposableEffect(pageCount) {
-        onDispose { if (restored) reportPage(currentPage, pageCount) }
-    }
+    DisposableEffect(pageCount) { onDispose { if (restored) reportPage(currentPage, pageCount) } }
 
     Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLow)) {
         LazyColumn(
             state = listState,
             modifier = Modifier.weight(1f).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp)
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 10.dp),
         ) {
             if (header != null) {
                 item { header() }
@@ -180,7 +176,7 @@ fun VerticalPageList(
                     maxZoom = maxZoom,
                     zoomScales = zoomScales,
                     zoomOffsets = zoomOffsets,
-                    onPageIndicatorClick = { showJumpDialog = true }
+                    onPageIndicatorClick = { showJumpDialog = true },
                 )
             }
         }
@@ -188,47 +184,69 @@ fun VerticalPageList(
         Surface(
             Modifier.fillMaxWidth(),
             shadowElevation = 3.dp,
-            color = MaterialTheme.colorScheme.surfaceContainer
+            color = MaterialTheme.colorScheme.surfaceContainer,
         ) {
             Column {
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(onClick = { showJumpDialog = true }) {
-                    Text(stringResource(R.string.preview_page_position, currentPage + 1, pageCount))
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp, horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = { showJumpDialog = true }) {
+                        Text(
+                            stringResource(
+                                R.string.preview_page_position,
+                                currentPage + 1,
+                                pageCount,
+                            )
+                        )
+                    }
+                    TextButton(
+                        onClick = { scope.launch { listState.scrollToItem(headerOffset) } }
+                    ) {
+                        Text(stringResource(R.string.preview_top))
+                    }
+                    TextButton(
+                        onClick = {
+                            zoomScales.clear()
+                            zoomOffsets.clear()
+                        }
+                    ) {
+                        Text(stringResource(R.string.preview_fit))
+                    }
                 }
-                TextButton(onClick = {
-                    scope.launch { listState.scrollToItem(headerOffset) }
-                }) {
-                    Text(stringResource(R.string.preview_top))
+                Row(
+                    Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    // Accessible, stable touch targets on narrow screens.
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            enabled = (zoomScales[currentPage] ?: 1f) > 1f,
+                            onClick = {
+                                zoomStep(currentPage, -0.25f, zoomScales, zoomOffsets, maxZoom)
+                            },
+                            modifier = Modifier.semantics { contentDescription = zoomOutLabel },
+                        ) {
+                            Text("−", fontWeight = FontWeight.Bold)
+                        }
+                        Text(
+                            "${((zoomScales[currentPage] ?: 1f) * 100).toInt()}%",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        IconButton(
+                            enabled = (zoomScales[currentPage] ?: 1f) < maxZoom,
+                            onClick = {
+                                zoomStep(currentPage, 0.25f, zoomScales, zoomOffsets, maxZoom)
+                            },
+                            modifier = Modifier.semantics { contentDescription = zoomInLabel },
+                        ) {
+                            Text("+", fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
-                TextButton(onClick = { zoomScales.clear(); zoomOffsets.clear() }) {
-                    Text(stringResource(R.string.preview_fit))
-                }
-            }
-                Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically) {
-                // Accessible, stable touch targets on narrow screens.
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        enabled = (zoomScales[currentPage] ?: 1f) > 1f,
-                        onClick = { zoomStep(currentPage, -0.25f, zoomScales, zoomOffsets, maxZoom) },
-                        modifier = Modifier.semantics { contentDescription = zoomOutLabel }
-                    ) { Text("−", fontWeight = FontWeight.Bold) }
-                    Text(
-                        "${((zoomScales[currentPage] ?: 1f) * 100).toInt()}%",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Medium
-                    )
-                    IconButton(
-                        enabled = (zoomScales[currentPage] ?: 1f) < maxZoom,
-                        onClick = { zoomStep(currentPage, 0.25f, zoomScales, zoomOffsets, maxZoom) },
-                        modifier = Modifier.semantics { contentDescription = zoomInLabel }
-                    ) { Text("+", fontWeight = FontWeight.Bold) }
-                }
-            }
             }
         }
     }
@@ -236,9 +254,7 @@ fun VerticalPageList(
     if (showJumpDialog) {
         var pageText by remember { mutableStateOf((currentPage + 1).toString()) }
         // 滑杆与输入框共享状态：输入数字时滑杆跟随，确认时优先取输入框
-        var sliderValue by remember(pageCount) {
-            mutableFloatStateOf((currentPage + 1).toFloat())
-        }
+        var sliderValue by remember(pageCount) { mutableFloatStateOf((currentPage + 1).toFloat()) }
         AlertDialog(
             onDismissRequest = { showJumpDialog = false },
             title = { Text(stringResource(R.string.preview_jump_page, pageCount)) },
@@ -255,31 +271,38 @@ fun VerticalPageList(
                         label = { Text(stringResource(R.string.preview_jump_hint)) },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        isError = pageText.toIntOrNull() !in 1..pageCount
+                        isError = pageText.toIntOrNull() !in 1..pageCount,
                     )
                     Spacer(Modifier.size(8.dp))
-                    if (pageCount > 1) Slider(
-                        value = sliderValue,
-                        onValueChange = { sliderValue = it; pageText = it.toInt().toString() },
-                        valueRange = 1f..pageCount.toFloat(),
-                        steps = 0
-                    )
+                    if (pageCount > 1)
+                        Slider(
+                            value = sliderValue,
+                            onValueChange = {
+                                sliderValue = it
+                                pageText = it.toInt().toString()
+                            },
+                            valueRange = 1f..pageCount.toFloat(),
+                            steps = 0,
+                        )
                     Text(
                         "第 ${sliderValue.toInt()} 页 / 共 $pageCount 页",
                         style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                        modifier = Modifier.align(Alignment.CenterHorizontally),
                     )
                 }
             },
             confirmButton = {
-                TextButton(enabled = pageText.toIntOrNull() in 1..pageCount, onClick = {
-                    val page = (pageText.toIntOrNull() ?: sliderValue.toInt())
-                        .coerceIn(1, pageCount)
-                    // 与续读恢复路径一致：header 存在时目标索引要整体后移 headerOffset，
-                    // 否则 Office 预览（带保真度说明 header）会恒定跳到前一格。
-                    scope.launch { listState.scrollToItem(headerOffset + page - 1) }
-                    showJumpDialog = false
-                }) {
+                TextButton(
+                    enabled = pageText.toIntOrNull() in 1..pageCount,
+                    onClick = {
+                        val page =
+                            (pageText.toIntOrNull() ?: sliderValue.toInt()).coerceIn(1, pageCount)
+                        // 与续读恢复路径一致：header 存在时目标索引要整体后移 headerOffset，
+                        // 否则 Office 预览（带保真度说明 header）会恒定跳到前一格。
+                        scope.launch { listState.scrollToItem(headerOffset + page - 1) }
+                        showJumpDialog = false
+                    },
+                ) {
                     Text(stringResource(R.string.preview_jump_confirm))
                 }
             },
@@ -287,7 +310,7 @@ fun VerticalPageList(
                 TextButton(onClick = { showJumpDialog = false }) {
                     Text(stringResource(R.string.preview_cancel))
                 }
-            }
+            },
         )
     }
 }
@@ -298,13 +321,16 @@ private fun zoomStep(
     delta: Float,
     scales: androidx.compose.runtime.snapshots.SnapshotStateMap<Int, Float>,
     offsets: androidx.compose.runtime.snapshots.SnapshotStateMap<Int, Offset>,
-    maxZoom: Float
+    maxZoom: Float,
 ) {
     val current = scales[page] ?: 1f
     val next = (current + delta).coerceIn(1f, maxZoom)
     scales[page] = next
-    if (next <= 1f) offsets.remove(page) else offsets[page] =
-        (offsets[page] ?: Offset.Zero) * ((next - 1f) / (current - 1f).coerceAtLeast(0.001f)).coerceAtMost(1f)
+    if (next <= 1f) offsets.remove(page)
+    else
+        offsets[page] =
+            (offsets[page] ?: Offset.Zero) *
+                ((next - 1f) / (current - 1f).coerceAtLeast(0.001f)).coerceAtMost(1f)
 }
 
 @Composable
@@ -317,7 +343,7 @@ private fun PageRow(
     maxZoom: Float,
     zoomScales: androidx.compose.runtime.snapshots.SnapshotStateMap<Int, Float>,
     zoomOffsets: androidx.compose.runtime.snapshots.SnapshotStateMap<Int, Offset>,
-    onPageIndicatorClick: () -> Unit
+    onPageIndicatorClick: () -> Unit,
 ) {
     var bitmap by remember(pageIndex) { mutableStateOf<Bitmap?>(cache[pageIndex]) }
     var failed by remember(pageIndex) { mutableStateOf(false) }
@@ -349,8 +375,10 @@ private fun PageRow(
 
     Column {
         Box(
-            Modifier.fillMaxWidth().aspectRatio(aspect.coerceAtLeast(0.1f))
-                .clip(RoundedCornerShape(6.dp)).background(Color.White)
+            Modifier.fillMaxWidth()
+                .aspectRatio(aspect.coerceAtLeast(0.1f))
+                .clip(RoundedCornerShape(6.dp))
+                .background(Color.White)
                 .onSizeChanged { boxSize = it }
                 .pinchZoom(
                     scaleProvider = { scale },
@@ -361,7 +389,8 @@ private fun PageRow(
                     onOffset = {
                         val maxX = boxSize.width * (scale - 1f).coerceAtLeast(0f) / 2
                         val maxY = boxSize.height * (scale - 1f).coerceAtLeast(0f) / 2
-                        zoomOffsets[pageIndex] = Offset(it.x.coerceIn(-maxX, maxX), it.y.coerceIn(-maxY, maxY))
+                        zoomOffsets[pageIndex] =
+                            Offset(it.x.coerceIn(-maxX, maxX), it.y.coerceIn(-maxY, maxY))
                     },
                     onDoubleTap = { tap ->
                         // 以点击点为锚点缩放：放大后手指下仍是原来的内容
@@ -375,24 +404,35 @@ private fun PageRow(
                             // 要求点击点 t 处的内容仍在 t，得 T = (t - c)(1 - s)
                             zoomOffsets[pageIndex] = (tap - center) * (1f - 2f)
                         }
-                    }
+                    },
                 ),
-            contentAlignment = Alignment.Center
+            contentAlignment = Alignment.Center,
         ) {
             val bmp = bitmap
             when {
-                bmp != null -> Image(
-                    bitmap = bmp.asImageBitmap(),
-                    contentDescription = "第 ${pageIndex + 1} 页",
-                    contentScale = ContentScale.FillWidth,
-                    modifier = Modifier.fillMaxWidth().graphicsLayer(
-                        scaleX = scale, scaleY = scale,
-                        translationX = offset.x, translationY = offset.y
+                bmp != null ->
+                    Image(
+                        bitmap = bmp.asImageBitmap(),
+                        contentDescription = "第 ${pageIndex + 1} 页",
+                        contentScale = ContentScale.FillWidth,
+                        modifier =
+                            Modifier.fillMaxWidth()
+                                .graphicsLayer(
+                                    scaleX = scale,
+                                    scaleY = scale,
+                                    translationX = offset.x,
+                                    translationY = offset.y,
+                                ),
                     )
-                )
-                failed -> TextButton(onClick = { failed = false; retry++ }) {
-                    Text(stringResource(R.string.preview_page_retry), color = Color(0xFF4F46E5))
-                }
+                failed ->
+                    TextButton(
+                        onClick = {
+                            failed = false
+                            retry++
+                        }
+                    ) {
+                        Text(stringResource(R.string.preview_page_retry), color = Color(0xFF4F46E5))
+                    }
                 else -> CircularProgressIndicator(modifier = Modifier.padding(24.dp))
             }
         }
@@ -402,9 +442,10 @@ private fun PageRow(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.align(Alignment.CenterHorizontally)
-                .clickable(onClick = onPageIndicatorClick)
-                .padding(4.dp)
+            modifier =
+                Modifier.align(Alignment.CenterHorizontally)
+                    .clickable(onClick = onPageIndicatorClick)
+                    .padding(4.dp),
         )
     }
 }
@@ -413,8 +454,7 @@ private fun PageRow(
  * 双指缩放 + 单指平移手势，处理与 LazyColumn 纵向滚动的冲突：
  * - 两指：缩放并以双指中心为锚点平移；
  * - 单指且已缩放（>1x）：平移；
- * - 单指且未缩放：不消费事件，交给 LazyColumn 滚动。
- * 双击以**点击点**为锚点在 1x / 2x 间切换（[onDoubleTap] 收到的是组件内坐标）。
+ * - 单指且未缩放：不消费事件，交给 LazyColumn 滚动。 双击以**点击点**为锚点在 1x / 2x 间切换（[onDoubleTap] 收到的是组件内坐标）。
  */
 private fun Modifier.pinchZoom(
     scaleProvider: () -> Float,
@@ -423,52 +463,53 @@ private fun Modifier.pinchZoom(
     maxZoom: Float,
     onScale: (Float) -> Unit,
     onOffset: (Offset) -> Unit,
-    onDoubleTap: (Offset) -> Unit
-): Modifier = this
-    .pointerInput(Unit) {
-        detectTapGestures(onDoubleTap = { tap -> onDoubleTap(tap) })
-    }
-    .pointerInput(Unit) {
-        awaitEachGesture {
-            awaitFirstDown(requireUnconsumed = false)
-            var startScale = 0f
-            var startOffset = Offset.Zero
-            var startCentroid = Offset.Zero
-            var accZoom = 1f
-            do {
-                val event = awaitPointerEvent()
-                val changes = event.changes
-                if (changes.size >= 2) {
-                    changes.forEach { it.consume() }
-                    val centroid = event.calculateCentroid(useCurrent = true)
-                    if (startScale == 0f) {
-                        startScale = scaleProvider()
-                        startOffset = offsetProvider()
-                        startCentroid = centroid
-                    } else {
-                        accZoom *= event.calculateZoom()
-                        val newScale = (startScale * accZoom).coerceIn(1f, maxZoom)
-                        onScale(newScale)
-                        if (newScale <= 1f) {
-                            onOffset(Offset.Zero)
+    onDoubleTap: (Offset) -> Unit,
+): Modifier =
+    this.pointerInput(Unit) { detectTapGestures(onDoubleTap = { tap -> onDoubleTap(tap) }) }
+        .pointerInput(Unit) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                var startScale = 0f
+                var startOffset = Offset.Zero
+                var startCentroid = Offset.Zero
+                var accZoom = 1f
+                do {
+                    val event = awaitPointerEvent()
+                    val changes = event.changes
+                    if (changes.size >= 2) {
+                        changes.forEach { it.consume() }
+                        val centroid = event.calculateCentroid(useCurrent = true)
+                        if (startScale == 0f) {
+                            startScale = scaleProvider()
+                            startOffset = offsetProvider()
+                            startCentroid = centroid
                         } else {
-                            // graphicsLayer 以组件中心为原点缩放；让手势开始时双指中心
-                            // 对准的内容点始终落在当前双指中心，实现以手指为中心缩放。
-                            val center = sizeProvider().let {
-                                Offset(it.width / 2f, it.height / 2f)
+                            accZoom *= event.calculateZoom()
+                            val newScale = (startScale * accZoom).coerceIn(1f, maxZoom)
+                            onScale(newScale)
+                            if (newScale <= 1f) {
+                                onOffset(Offset.Zero)
+                            } else {
+                                // graphicsLayer 以组件中心为原点缩放；让手势开始时双指中心
+                                // 对准的内容点始终落在当前双指中心，实现以手指为中心缩放。
+                                val center =
+                                    sizeProvider().let { Offset(it.width / 2f, it.height / 2f) }
+                                val ratio = newScale / startScale
+                                onOffset(
+                                    centroid -
+                                        center -
+                                        (startCentroid - center - startOffset) * ratio
+                                )
                             }
-                            val ratio = newScale / startScale
-                            onOffset(centroid - center - (startCentroid - center - startOffset) * ratio)
                         }
+                    } else if (changes.size == 1) {
+                        val change = changes.first()
+                        if (scaleProvider() > 1f) {
+                            change.consume()
+                            onOffset(offsetProvider() + change.positionChange())
+                        }
+                        // 未缩放时不消费，LazyColumn 正常滚动
                     }
-                } else if (changes.size == 1) {
-                    val change = changes.first()
-                    if (scaleProvider() > 1f) {
-                        change.consume()
-                        onOffset(offsetProvider() + change.positionChange())
-                    }
-                    // 未缩放时不消费，LazyColumn 正常滚动
-                }
-            } while (changes.any { it.pressed })
+                } while (changes.any { it.pressed })
+            }
         }
-    }

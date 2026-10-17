@@ -5,6 +5,7 @@
 而整体崩溃：该写法会抛 AttributeError，且不会被 except ImportError 捕获，
 导致所有 PDF / Office 预览都只显示"预览加载失败"。
 """
+
 import os
 import subprocess
 import sys
@@ -20,8 +21,13 @@ def _run(script: str) -> subprocess.CompletedProcess:
     env["PYTHONIOENCODING"] = "utf-8"
     return subprocess.run(
         [sys.executable, "-c", script],
-        cwd=ROOT, env=env, capture_output=True, text=True, encoding="utf-8",
-        errors="replace", timeout=120,
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=120,
     )
 
 

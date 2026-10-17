@@ -47,8 +47,7 @@ class Prefs(context: Context) {
     /**
      * 某课程**未启用**的内容来源（Canvas 对关闭的标签页返回 404）。
      *
-     * 记下来后下次同步直接跳过，避免每轮都白发一轮请求（既慢又刷错误提示）。
-     * 用户在 Canvas 上重新开启该功能后，用「全量同步」可清空这些标记。
+     * 记下来后下次同步直接跳过，避免每轮都白发一轮请求（既慢又刷错误提示）。 用户在 Canvas 上重新开启该功能后，用「全量同步」可清空这些标记。
      */
     fun disabledSources(courseId: Long): Set<String> =
         sp.getStringSet(keyForCourse(courseId), emptySet()) ?: emptySet()
@@ -61,9 +60,9 @@ class Prefs(context: Context) {
     }
 
     fun clearDisabledSources() {
-        sp.edit().apply {
-            sp.all.keys.filter { it.startsWith(DISABLED_PREFIX) }.forEach { remove(it) }
-        }.apply()
+        sp.edit()
+            .apply { sp.all.keys.filter { it.startsWith(DISABLED_PREFIX) }.forEach { remove(it) } }
+            .apply()
     }
 
     private fun keyForCourse(courseId: Long) = "$DISABLED_PREFIX$courseId"

@@ -1,14 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <!-- 靛蓝渐变背景（aapt gradient） -->
-    <path
-        android:fillColor="#6366F1"
-        android:pathData="M0,0 h108 v108 h-108 z" />
-    <path
-        android:fillColor="#4338CA"
-        android:pathData="M0,54 h108 v54 h-108 z" />
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#102A56" android:pathData="M0,0 h108 v108 h-108 z" />
+    <path android:fillColor="#2457D6" android:pathData="M0,70 C30,48 68,52 108,25 L108,108 L0,108 Z" />
 </vector>

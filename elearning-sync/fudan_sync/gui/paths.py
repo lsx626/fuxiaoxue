@@ -5,6 +5,7 @@
      这样用户已经下载好的课程文件可以原样复用，不必重新下载。
   2. 否则使用用户数据目录（Windows: %APPDATA%\\fudan-elearning-sync）。
 """
+
 from __future__ import annotations
 
 import os

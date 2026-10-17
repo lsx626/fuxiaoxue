@@ -4,6 +4,7 @@
 主进程里反复建。子进程的 cwd / APPDATA 都指向临时目录，避免碰到用户
 真实配置、状态库或 GUI 状态。
 """
+
 from __future__ import annotations
 
 import os
@@ -15,7 +16,7 @@ import pytest
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
-_SCRIPT = r'''
+_SCRIPT = r"""
 import os
 import sys
 
@@ -155,7 +156,7 @@ window.close()
 window.deleteLater()
 app.processEvents()
 print("SEARCH_UI_OK")
-'''
+"""
 
 
 @pytest.fixture
@@ -165,17 +166,18 @@ def smoke_base(tmp_path):
     with open(config, "w", encoding="utf-8") as handle:
         handle.write(
             "base_url: https://elearning.fudan.edu.cn\n"
-            "auth:\n  method: token\n  token: \"\"\n"
+            'auth:\n  method: token\n  token: ""\n'
             f"root_dir: {os.path.join(base, 'files')}\n"
             f"state_db: {os.path.join(base, 'st.db')}\n"
-            "log_file: \"\"\n")
+            'log_file: ""\n'
+        )
     return base
 
 
 def test_search_dialog_and_main_window_flow(smoke_base):
     env = dict(os.environ)
     env["QT_QPA_PLATFORM"] = "offscreen"
-    env["APPDATA"] = smoke_base          # 沙箱化 GUI 状态与数据目录
+    env["APPDATA"] = smoke_base  # 沙箱化 GUI 状态与数据目录
     env["LOCALAPPDATA"] = smoke_base
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -183,7 +185,7 @@ def test_search_dialog_and_main_window_flow(smoke_base):
     env["PYTHONPATH"] = ROOT  # fudan_sync 包在 elearning-sync/ 下
     result = subprocess.run(
         [sys.executable, "-c", _SCRIPT],
-        cwd=smoke_base,                  # 便携模式 config.yaml 落在临时目录
+        cwd=smoke_base,  # 便携模式 config.yaml 落在临时目录
         env=env,
         capture_output=True,
         text=True,

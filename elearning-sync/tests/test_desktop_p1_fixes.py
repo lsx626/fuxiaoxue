@@ -6,6 +6,7 @@
    仍按旧方式认证而失败）；
 3. 认证中间页缺少 CAS 回调地址时，错误文案不得携带响应正文（防凭据/上下文泄露）。
 """
+
 from __future__ import annotations
 
 import logging
@@ -17,10 +18,9 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-import yaml  # noqa: E402
-
 import fudan_sync.password_login as pl  # noqa: E402
 import sync as cli  # noqa: E402
+import yaml  # noqa: E402
 from fudan_sync.config import load_config  # noqa: E402
 from fudan_sync.state import StateStore  # noqa: E402
 
@@ -37,9 +37,7 @@ class StateStoreRollbackTests(unittest.TestCase):
     def test_exception_rolls_back_partial_writes(self):
         with self.assertRaises(sqlite3.Error):
             with self.store._write_lock_cursor() as cur:
-                cur.execute(
-                    "UPDATE courses SET name=? WHERE id=?", ("被改坏的名字", 1)
-                )
+                cur.execute("UPDATE courses SET name=? WHERE id=?", ("被改坏的名字", 1))
                 # 第二条语句失败：整个事务必须回滚，第一句不能生效
                 cur.execute("UPDATE courses SET non_existing_column=? WHERE id=?", (1, 1))
 

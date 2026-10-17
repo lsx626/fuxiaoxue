@@ -1,4 +1,5 @@
 """文件下载器：流式下载、断点续传、并发、完整性校验。"""
+
 from __future__ import annotations
 
 import os
@@ -7,20 +8,18 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional
+from typing import Callable, List, Optional
 
 import requests
-
-from .utils import format_size
 
 
 class DownloadAuthError(RuntimeError):
     """下载请求被重定向到 UIS 登录页：Canvas 会话已过期。"""
 
 
-def _is_auth_redirect(resp) -> bool:
+def _is_auth_redirect(response) -> bool:
     """响应是否被重定向到 UIS 统一认证页（会话过期的可靠特征）。"""
-    return "id.fudan.edu.cn" in (getattr(resp, "url", "") or "")
+    return "id.fudan.edu.cn" in (getattr(response, "url", "") or "")
 
 
 @dataclass
@@ -29,16 +28,17 @@ class DownloadTask:
     course_id: int
     filename: str
     folder_path: str
-    course_dir: str        # 本地课程目录（绝对）
+    course_directory: str
     size: int
-    api_path: str          # 用于换取下载 URL 的 API 路径，如 /courses/123/files/456
-    fallback_url: str = "" # 直接可用的下载 URL（可能已过期，备用）
+    api_path: str  # 用于换取下载 URL 的 API 路径，如 /courses/123/files/456
+    fallback_url: str = ""  # 直接可用的下载 URL（可能已过期，备用）
 
     @property
-    def dest_path(self) -> str:
-        rel = os.path.join(self.folder_path, self.filename) if self.folder_path \
-            else self.filename
-        return os.path.join(self.course_dir, *rel.split("/")) if rel else self.course_dir
+    def destination_path(self) -> str:
+        rel = os.path.join(self.folder_path, self.filename) if self.folder_path else self.filename
+        return (
+            os.path.join(self.course_directory, *rel.split("/")) if rel else self.course_directory
+        )
 
 
 _HTML_EXTENSIONS = {".html", ".htm", ".xhtml"}
@@ -82,11 +82,17 @@ class Downloader:
     - 支持 HTTP Range 断点续传。
     """
 
-    def __init__(self, api_session: requests.Session, api_base: str,
-                 concurrency: int = 4, max_retries: int = 5,
-                 chunk_size: int = 1 << 20, logger=None,
-                 progress_callback: Optional[Callable[[DownloadTask, int, int], None]] = None):
-        self.api_session = api_session      # 复用 CanvasAPI 的会话（含认证）
+    def __init__(
+        self,
+        api_session: requests.Session,
+        api_base: str,
+        concurrency: int = 4,
+        max_retries: int = 5,
+        chunk_size: int = 1 << 20,
+        logger=None,
+        progress_callback: Optional[Callable[[DownloadTask, int, int], None]] = None,
+    ):
+        self.api_session = api_session  # 复用 CanvasAPI 的会话（含认证）
         self.api_base = api_base.rstrip("/")
         self.concurrency = max(1, concurrency)
         self.max_retries = max(1, max_retries)
@@ -119,26 +125,24 @@ class Downloader:
         """优先用 API 换取新鲜的签名下载 URL，失败时回退到文件对象自带的 url。"""
         url = f"{self.api_base}{task.api_path}"
         try:
-            resp = self.api_session.get(url, timeout=30,
-                                        headers={"Accept": "application/json"})
-            if resp.status_code == 200:
-                data = resp.json()
+            response = self.api_session.get(url, timeout=30, headers={"Accept": "application/json"})
+            if response.status_code == 200:
+                data = response.json()
                 if isinstance(data, dict) and data.get("url"):
                     return data["url"]
         except (requests.RequestException, ValueError) as exc:
             if self.log:
-                self.log.debug("换取下载 URL 失败 %s（将使用备用 URL）: %s",
-                               task.api_path, exc)
+                self.log.debug("换取下载 URL 失败 %s（将使用备用 URL）: %s", task.api_path, exc)
         if task.fallback_url:
             return task.fallback_url
         raise RuntimeError(f"无法获取文件 {task.file_id} 的下载地址")
 
     def _download_one(self, task: DownloadTask) -> DownloadResult:
         result = DownloadResult(task)
-        dest = task.dest_path
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        destination = task.destination_path
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
 
-        tmp = f"{dest}.part"
+        temporary_path = f"{destination}.part"
         attempt = 0
         while attempt < self.max_retries and not self._stop.is_set():
             # v1.2.2：别的文件已经确认会话过期——本文件不必再重试
@@ -152,15 +156,15 @@ class Downloader:
                 result.error = f"获取下载地址失败: {exc}"
                 if attempt >= self.max_retries:
                     return result
-                time.sleep(min(2 ** attempt, 20))
+                time.sleep(min(2**attempt, 20))
                 continue
 
             offset = 0
             # 覆盖会话默认的 Accept: application/json，文件下载要的是二进制流
             headers = {"Accept": "*/*"}
             mode = "wb"
-            if os.path.exists(tmp):  # 断点续传
-                offset = os.path.getsize(tmp)
+            if os.path.exists(temporary_path):  # 断点续传
+                offset = os.path.getsize(temporary_path)
                 if task.size > 0 and offset >= task.size:
                     offset = 0  # 临时文件异常，重下
                 if offset > 0:
@@ -171,54 +175,59 @@ class Downloader:
                 # 必须复用带 Canvas 会话的 api_session：模块级 requests.get
                 # 不携带 Cookie，文件下载链接会把请求重定向到 UIS 登录页，
                 # 拿回一段固定 6328 字节的 HTML 而不是文件内容。
-                with self.api_session.get(download_url, stream=True, headers=headers,
-                                          timeout=(15, 300), allow_redirects=True) as resp:
+                with self.api_session.get(
+                    download_url,
+                    stream=True,
+                    headers=headers,
+                    timeout=(15, 300),
+                    allow_redirects=True,
+                ) as response:
                     # 416：续传区间越界（多半是上次把登录页等错误响应写进了
                     # .part）。丢弃残留 .part 从零重试，否则会陷入永久 416。
-                    if resp.status_code == 416:
-                        resp.close()
-                        if os.path.exists(tmp):
-                            os.remove(tmp)
+                    if response.status_code == 416:
+                        response.close()
+                        if os.path.exists(temporary_path):
+                            os.remove(temporary_path)
                         result.error = "续传区间无效，已重置临时文件并重试"
                         if attempt < self.max_retries and not self._stop.is_set():
-                            time.sleep(min(2 ** attempt, 20))
+                            time.sleep(min(2**attempt, 20))
                             continue
                         return result
 
                     # 会话过期：被重定向到 UIS 统一认证页，重试也只能拿到登录页。
-                    if _is_auth_redirect(resp):
-                        resp.close()
-                        if os.path.exists(tmp):
-                            os.remove(tmp)
+                    if _is_auth_redirect(response):
+                        response.close()
+                        if os.path.exists(temporary_path):
+                            os.remove(temporary_path)
                         raise DownloadAuthError("Canvas 会话已过期，请重新登录")
 
                     # 服务器忽略了 Range 请求 -> 重新完整写入
-                    if offset > 0 and resp.status_code == 200:
+                    if offset > 0 and response.status_code == 200:
                         offset, mode = 0, "wb"
                     # v1.2.2：401/403 与会话或权限有关，重试纯属浪费——
                     # 401 是会话过期（熔断，其余文件直接跳过）；
                     # 403 最常见于教师锁定文件（答案类 .py / 压缩包 / 答案文档）。
-                    if resp.status_code in (401, 403):
+                    if response.status_code in (401, 403):
                         try:
-                            resp.close()
+                            response.close()
                         except Exception:  # pylint: disable=broad-except
                             pass
-                        if os.path.exists(tmp):
-                            os.remove(tmp)
-                        if resp.status_code == 401:
+                        if os.path.exists(temporary_path):
+                            os.remove(temporary_path)
+                        if response.status_code == 401:
                             self._auth_failed.set()
                             result.error = "Canvas 会话已过期（HTTP 401），请重新登录后同步"
                         else:
                             result.error = "无权访问（HTTP 403）：该文件可能已被教师锁定"
                         return result
-                    resp.raise_for_status()
+                    response.raise_for_status()
 
-                    content_length = resp.headers.get("Content-Length")
+                    content_length = response.headers.get("Content-Length")
                     expected = int(content_length) + offset if content_length else None
 
                     written = offset
-                    with open(tmp, mode) as handle:
-                        for chunk in resp.iter_content(self.chunk_size):
+                    with open(temporary_path, mode) as handle:
+                        for chunk in response.iter_content(self.chunk_size):
                             if self._stop.is_set():
                                 result.error = "用户中断"
                                 return result
@@ -227,8 +236,7 @@ class Downloader:
                             handle.write(chunk)
                             written += len(chunk)
                             if self.progress_callback:
-                                self.progress_callback(task, written,
-                                                       expected or task.size or 0)
+                                self.progress_callback(task, written, expected or task.size or 0)
                     result.bytes = written
             except DownloadAuthError:
                 # 会话过期：重试无意义，直接把明确的原因返回给上层
@@ -237,18 +245,23 @@ class Downloader:
             except (requests.RequestException, OSError) as exc:
                 result.error = f"{type(exc).__name__}: {exc}"
                 if attempt < self.max_retries and not self._stop.is_set():
-                    wait = min(2 ** attempt, 20)
+                    wait = min(2**attempt, 20)
                     if self.log:
-                        self.log.debug("下载失败，%ds 后重试（%d/%d）%s: %s",
-                                       wait, attempt, self.max_retries,
-                                       task.filename, exc)
+                        self.log.debug(
+                            "下载失败，%ds 后重试（%d/%d）%s: %s",
+                            wait,
+                            attempt,
+                            self.max_retries,
+                            task.filename,
+                            exc,
+                        )
                     time.sleep(wait)
                 continue
 
             # 登录页误存防护：会话过期时可能把认证页 HTML 当文件存下；
             # 上一轮残留的 .part 续传也会让真实内容前面拼上一段登录页。
-            if not _is_html_target(task) and _looks_like_auth_page(tmp):
-                os.remove(tmp)
+            if not _is_html_target(task) and _looks_like_auth_page(temporary_path):
+                os.remove(temporary_path)
                 # v1.2.2：确认会话过期 → 熔断，其余排队文件不再逐个重试 5 次
                 self._auth_failed.set()
                 result.error = "Canvas 会话已过期，请重新登录后同步"
@@ -256,19 +269,19 @@ class Downloader:
 
             # 完整性校验：大小须匹配（未知时放行）
             if task.size > 0 and result.bytes != task.size:
-                result.error = (f"大小不匹配: 期望 {task.size} 实际 {result.bytes}")
+                result.error = f"大小不匹配: 期望 {task.size} 实际 {result.bytes}"
                 if attempt < self.max_retries:
-                    if os.path.exists(tmp):
-                        os.remove(tmp)
-                    time.sleep(min(2 ** attempt, 20))
+                    if os.path.exists(temporary_path):
+                        os.remove(temporary_path)
+                    time.sleep(min(2**attempt, 20))
                     continue
                 return result
 
             # 原子改名到目标路径：同一 file_id 的内容更新必须覆盖旧文件
             # （state.local_path 是该 file_id 的权威路径）；
             # 不同 file_id 的同名冲突由同步引擎在构建任务时改名避让。
-            os.replace(tmp, dest)
-            result.local_path = dest
+            os.replace(temporary_path, destination)
+            result.local_path = destination
             result.success = True
             result.error = ""
             with self._lock:
@@ -278,9 +291,9 @@ class Downloader:
         return result
 
     # ------------------------------------------------------------------
-    def download_many(self, tasks: List[DownloadTask],
-                      on_done: Optional[Callable[[DownloadResult], None]] = None) \
-            -> List[DownloadResult]:
+    def download_many(
+        self, tasks: List[DownloadTask], on_done: Optional[Callable[[DownloadResult], None]] = None
+    ) -> List[DownloadResult]:
         results: List[DownloadResult] = []
         if not tasks:
             return results
@@ -302,9 +315,6 @@ class Downloader:
                 if on_done:
                     on_done(result)
         return results
-
-
-from .utils import free_space_gb  # noqa: F401  （统一实现，避免与 utils 重复）
 
 
 def safe_rmtree(path: str) -> None:

@@ -11,11 +11,9 @@ package edu.fudan.elearning.sync.sync
  */
 object HtmlFileLinks {
 
-    private val FILE_LINK_RE =
-        Regex("""/(?:api/v1/)?courses/\d+/files/(\d+)(?:[/?"'\s>]|$)""")
+    private val FILE_LINK_RE = Regex("""/(?:api/v1/)?courses/\d+/files/(\d+)(?:[/?"'\s>]|$)""")
 
-    private val FILE_PREVIEW_RE =
-        Regex("""/files/(\d+)/preview""")
+    private val FILE_PREVIEW_RE = Regex("""/files/(\d+)/preview""")
 
     /** 正文里出现过的所有 file_id（去重、只保留正数）。 */
     fun extractFileIds(html: String?): Set<Long> {

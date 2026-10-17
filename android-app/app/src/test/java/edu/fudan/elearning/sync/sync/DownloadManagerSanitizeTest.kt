@@ -6,8 +6,7 @@ import org.junit.Test
 /**
  * 文件名净化的 JVM 单测：重点是百分号解码的正确性与安全性。
  *
- * Canvas 的 filename 字段对非 ASCII 名字常返回百分号编码，直接落盘会让
- * 本地文件名变成乱码；sanitize 必须安全解码而不能破坏字面百分号。
+ * Canvas 的 filename 字段对非 ASCII 名字常返回百分号编码，直接落盘会让 本地文件名变成乱码；sanitize 必须安全解码而不能破坏字面百分号。
  */
 class DownloadManagerSanitizeTest {
 

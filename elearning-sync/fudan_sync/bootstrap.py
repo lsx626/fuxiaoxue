@@ -6,6 +6,7 @@ process before Python can report an import error. The application therefore
 uses only a complete, matching PySide6-Addons installation and lets the
 previewer show a graceful in-app fallback when it is absent.
 """
+
 from __future__ import annotations
 
 import importlib.util

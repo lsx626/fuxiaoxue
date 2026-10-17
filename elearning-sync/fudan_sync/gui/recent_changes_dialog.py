@@ -3,6 +3,7 @@
 数据来自 `sync_changes` 表（v1.1.0 起；同步引擎在下载成功与远端删除时
 写入）。在此之前的同步通知只说「新增 N 个文件」，用户不知道下了什么。
 """
+
 from __future__ import annotations
 
 import datetime
@@ -10,11 +11,19 @@ from typing import List, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QLabel, QListWidget,
-                               QListWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..state import StateStore
-from .styles import (ACCENT, CARD, DANGER, TEXT_SECONDARY)
+from ..utils import clean_course_name
+from .styles import ACCENT, CARD, DANGER, TEXT_SECONDARY
 
 _CHANGE_TEXT = {"new": "新增", "updated": "更新", "removed": "删除"}
 _CHANGE_COLOR = {"new": ACCENT, "updated": ACCENT, "removed": DANGER}
@@ -69,7 +78,8 @@ class RecentChangesDialog(QDialog):
         self.list_widget.setStyleSheet(
             f"QListWidget {{ background: {CARD}; border: 1px solid #E2E7F1;"
             f" border-radius: 8px; }}"
-            f"QListWidget::item {{ padding: 8px 10px; }}")
+            f"QListWidget::item {{ padding: 8px 10px; }}"
+        )
         layout.addWidget(self.list_widget, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Close)

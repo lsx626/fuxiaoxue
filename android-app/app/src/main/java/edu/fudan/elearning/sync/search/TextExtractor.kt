@@ -4,19 +4,17 @@ import android.content.Context
 import edu.fudan.elearning.sync.office.OfficeExtractor
 import edu.fudan.elearning.sync.office.OfficeParseResult
 import edu.fudan.elearning.sync.office.PageItem
-import kotlinx.coroutines.CancellationException
 import java.io.File
+import kotlinx.coroutines.CancellationException
 
 /**
  * 把本地文件抽成纯文本供搜索索引使用。
  *
  * 复用预览链路已有的解析器，不引入新依赖：
- * - 纯文本/代码：读前 [SearchIndex.MAX_INDEX_CHARS] 字符（UTF-8 失败回退
- *   GB18030——与 Android 文本预览 v1.0.12 的回退口径一致）；
+ * - 纯文本/代码：读前 [SearchIndex.MAX_INDEX_CHARS] 字符（UTF-8 失败回退 GB18030——与 Android 文本预览 v1.0.12 的回退口径一致）；
  * - HTML：去标签留正文；
  * - Office 六格式：复用 [OfficeExtractor] 得到页模型后收集文本块；
- * - PDF / 图片 / 音视频 / 旧二进制 Office：**不抽取内容**，只索引文件名
- *   （Android 平台 PdfRenderer 只渲染不提供文本层；不在应用里内嵌新
+ * - PDF / 图片 / 音视频 / 旧二进制 Office：**不抽取内容**，只索引文件名 （Android 平台 PdfRenderer 只渲染不提供文本层；不在应用里内嵌新
  *   解析库ToDevice，与预览的降级说明口径一致，禁止假装成功）。
  *
  * 所有失败都返回 null，调用方只索引文件名——抽取失败绝不能影响同步。
@@ -25,30 +23,61 @@ object TextExtractor {
 
     private const val MAX_READ_BYTES = 16 * 1024 * 1024
 
-    private val TEXT_EXTENSIONS = setOf(
-        "txt", "md", "markdown", "csv", "tsv", "json", "xml", "log", "ini",
-        "cfg", "yml", "yaml", "py", "js", "ts", "java", "c", "h", "cpp",
-        "hpp", "cs", "go", "rs", "sql", "sh", "bat", "ps1", "tex", "srt",
-        "vtt", "toml", "properties"
-    )
+    private val TEXT_EXTENSIONS =
+        setOf(
+            "txt",
+            "md",
+            "markdown",
+            "csv",
+            "tsv",
+            "json",
+            "xml",
+            "log",
+            "ini",
+            "cfg",
+            "yml",
+            "yaml",
+            "py",
+            "js",
+            "ts",
+            "java",
+            "c",
+            "h",
+            "cpp",
+            "hpp",
+            "cs",
+            "go",
+            "rs",
+            "sql",
+            "sh",
+            "bat",
+            "ps1",
+            "tex",
+            "srt",
+            "vtt",
+            "toml",
+            "properties",
+        )
     private val HTML_EXTENSIONS = setOf("html", "htm", "xhtml")
 
-    /**
-     * 抽取纯文本；返回 null 表示无内容可索引（失败 / 不支持的格式）。
-     * [context] 仅为 OfficeExtractor 的渲染宽度探测所需。
-     */
-    suspend fun extractText(context: Context, file: File): String? = try {
-        if (!file.isFile) null else {
-        val ext = file.name.substringAfterLast('.', "").lowercase()
-        when {
-            TEXT_EXTENSIONS.contains(ext) -> extractPlain(file)
-            HTML_EXTENSIONS.contains(ext) -> extractHtml(file)
-            OfficeExtractor.isOffice(file.name) -> extractOffice(context, file)
-            else -> null
+    /** 抽取纯文本；返回 null 表示无内容可索引（失败 / 不支持的格式）。 [context] 仅为 OfficeExtractor 的渲染宽度探测所需。 */
+    suspend fun extractText(context: Context, file: File): String? =
+        try {
+            if (!file.isFile) null
+            else {
+                val ext = file.name.substringAfterLast('.', "").lowercase()
+                when {
+                    TEXT_EXTENSIONS.contains(ext) -> extractPlain(file)
+                    HTML_EXTENSIONS.contains(ext) -> extractHtml(file)
+                    OfficeExtractor.isOffice(file.name) -> extractOffice(context, file)
+                    else -> null
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            null
         }
-        }
-    } catch (cancelled: CancellationException) { throw cancelled }
-    catch (_: Exception) { null }
 
     /** 纯文本：UTF-8 优先，失败回退 GB18030/GBK。 */
     private fun extractPlain(file: File): String? {
@@ -84,12 +113,14 @@ object TextExtractor {
 
     private fun collectText(item: PageItem, builder: StringBuilder) {
         when (item) {
-            is PageItem.TextBlock -> for (para in item.paragraphs) {
-                builder.append(para.text).append(' ')
-            }
-            is PageItem.Table -> for (row in item.rows) {
-                for (cell in row.cells) builder.append(cell.text).append(' ')
-            }
+            is PageItem.TextBlock ->
+                for (para in item.paragraphs) {
+                    builder.append(para.text).append(' ')
+                }
+            is PageItem.Table ->
+                for (row in item.rows) {
+                    for (cell in row.cells) builder.append(cell.text).append(' ')
+                }
             is PageItem.Placeholder -> builder.append(item.label).append(' ')
             else -> Unit
         }
@@ -98,8 +129,7 @@ object TextExtractor {
     /**
      * 带回退地解码文本：UTF-8 → GB18030 → GBK → ISO-8859-1 兜底。
      *
-     * 注意：Java 的 `String(bytes, charset)` 对非法字节默认是**替换**而不抛
-     * 异常，GBK 文件会被当成「合法 UTF-8」解码成乱码，回退永远不会触发。
+     * 注意：Java 的 `String(bytes, charset)` 对非法字节默认是**替换**而不抛 异常，GBK 文件会被当成「合法 UTF-8」解码成乱码，回退永远不会触发。
      * 必须用 REPORT 模式的严格解码器，才能真正区分「解码成功」与「乱码」。
      */
     internal fun decodeText(raw: ByteArray): String {
@@ -127,13 +157,15 @@ object TextExtractor {
             cleaned.append(' ')
             i = end + 1
         }
-        val withEntities = cleaned.toString()
-            .replace("&nbsp;", " ")
-            .replace("&amp;", "&")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&#39;", "'")
+        val withEntities =
+            cleaned
+                .toString()
+                .replace("&nbsp;", " ")
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&#39;", "'")
         return withEntities.replace(Regex("\\s+"), " ").trim()
     }
 

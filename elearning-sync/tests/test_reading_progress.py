@@ -3,8 +3,6 @@
 预览器把页码/媒体秒写入 reading_progress；文件列表渲染进度列并按
 「未读过 → 最近读过」排序。进度只与界面有关，不影响增量/删除语义。
 """
-import os
-import sqlite3
 
 from fudan_sync.state import StateStore
 
@@ -14,20 +12,22 @@ def _store(tmp_path):
 
 
 def _add_file(store, file_id, course_id, filename, status="downloaded"):
-    store.upsert_file({
-        "file_id": file_id,
-        "course_id": course_id,
-        "filename": filename,
-        "display_name": filename,
-        "folder_path": "",
-        "local_path": f"/tmp/{filename}",
-        "size": 100,
-        "status": status,
-        "updated_at": "",
-        "modified_at": "",
-        "url": "",
-        "downloaded_at": "",
-    })
+    store.upsert_file(
+        {
+            "file_id": file_id,
+            "course_id": course_id,
+            "filename": filename,
+            "display_name": filename,
+            "folder_path": "",
+            "local_path": f"/tmp/{filename}",
+            "size": 100,
+            "status": status,
+            "updated_at": "",
+            "modified_at": "",
+            "url": "",
+            "downloaded_at": "",
+        }
+    )
 
 
 def test_progress_roundtrip_and_overwrite(tmp_path):
@@ -130,13 +130,16 @@ def test_unread_first_sorting(tmp_path):
 
 def test_reading_percentage_uses_displayed_page():
     from types import SimpleNamespace
+
     from fudan_sync.gui.main_window import MainWindow
 
-    holder = SimpleNamespace(_course_reading_progress={
-        1: {"position": 9, "total": 10},
-        2: {"position": 1, "total": 10},
-        3: {"position": 60, "total": 120, "is_media": True},
-    })
+    holder = SimpleNamespace(
+        _course_reading_progress={
+            1: {"position": 9, "total": 10},
+            2: {"position": 1, "total": 10},
+            3: {"position": 60, "total": 120, "is_media": True},
+        }
+    )
     assert MainWindow._reading_progress_text(holder, {"file_id": 1})[0] == "第 10 / 10 页 · 100%"
     assert MainWindow._reading_progress_text(holder, {"file_id": 2})[0] == "第 2 / 10 页 · 20%"
     assert MainWindow._reading_progress_text(holder, {"file_id": 3})[0] == "1:00 / 2:00"
@@ -144,13 +147,15 @@ def test_reading_percentage_uses_displayed_page():
 
 def test_pdf_fallback_renders_all_pages(tmp_path):
     """PyMuPDF 降级为所有页建立占位（v1.2.3 起按需渲染，位图只在可见时装载）。"""
-    import fitz
-    from PySide6.QtCore import QTimer
-    from PySide6.QtWidgets import QApplication, QScrollArea
-    from fudan_sync.gui.previewer import DocumentPreviewDialog, _detect_type
     from types import SimpleNamespace
 
+    import fitz
+    from fudan_sync.gui.previewer import DocumentPreviewDialog, _detect_type
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication, QScrollArea
+
     app = QApplication.instance() or QApplication([])
+    assert app is not None
 
     pdf_path = str(tmp_path / "doc.pdf")
     doc = fitz.open()

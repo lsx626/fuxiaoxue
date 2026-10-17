@@ -1,4 +1,5 @@
 """Desktop file sharing actions used by the main window and previewer."""
+
 from __future__ import annotations
 
 import os

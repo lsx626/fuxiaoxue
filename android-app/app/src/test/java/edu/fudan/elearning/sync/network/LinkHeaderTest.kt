@@ -9,12 +9,10 @@ class LinkHeaderTest {
 
     @Test
     fun next_picksRelNextFromMultipleLinks() {
-        val header = "<https://h/api/v1/courses?page=2&per_page=100>; rel=\"next\", " +
-            "<https://h/api/v1/courses?page=9&per_page=100>; rel=\"last\""
-        assertEquals(
-            "https://h/api/v1/courses?page=2&per_page=100",
-            LinkHeader.next(header)
-        )
+        val header =
+            "<https://h/api/v1/courses?page=2&per_page=100>; rel=\"next\", " +
+                "<https://h/api/v1/courses?page=9&per_page=100>; rel=\"last\""
+        assertEquals("https://h/api/v1/courses?page=2&per_page=100", LinkHeader.next(header))
     }
 
     @Test
@@ -31,7 +29,7 @@ class LinkHeaderTest {
         val header = "<https://h/api/v1/courses?page=2&include[]=a,b&bookmark=xyz>; rel=\"next\""
         assertEquals(
             "https://h/api/v1/courses?page=2&include[]=a,b&bookmark=xyz",
-            LinkHeader.next(header)
+            LinkHeader.next(header),
         )
     }
 

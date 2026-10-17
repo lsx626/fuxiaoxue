@@ -5,6 +5,7 @@
 右侧展示选中课程的文件列表，支持多选、按大小排序与批量删除。
 删除操作同时清除本地文件与状态数据库记录。
 """
+
 from __future__ import annotations
 
 import os
@@ -12,18 +13,28 @@ from typing import Dict, List, Optional, Set
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QGuiApplication
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QDialog,
-                               QFrame, QHBoxLayout, QHeaderView, QLabel,
-                               QListWidget, QListWidgetItem, QMessageBox,
-                               QPushButton, QSizePolicy, QSplitter,
-                               QTableWidget, QTableWidgetItem, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QDialog,
+    QFrame,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..state import StateStore
 from ..utils import format_size
 from .icon import app_icon
-from .styles import (ACCENT, BG, BORDER, CARD, DANGER, TEXT, TEXT_SECONDARY,
-                     WARNING)
+from .styles import BORDER, TEXT, TEXT_SECONDARY
 
 
 class StorageManagerDialog(QDialog):
@@ -49,11 +60,11 @@ class StorageManagerDialog(QDialog):
         self.resize(1080, 700)
 
         # 状态数据
-        self._all_courses: List[Dict] = []       # 所有课程（带统计信息）
-        self._all_terms: List[str] = []          # 所有学期
-        self._selected_terms: Set[str] = set()   # 当前勾选的学期
+        self._all_courses: List[Dict] = []  # 所有课程（带统计信息）
+        self._all_terms: List[str] = []  # 所有学期
+        self._selected_terms: Set[str] = set()  # 当前勾选的学期
         self._selected_course_id: Optional[int] = None  # 当前选中的课程
-        self._sort_by_size_desc: bool = True     # 文件列表是否按大小降序
+        self._sort_by_size_desc: bool = True  # 文件列表是否按大小降序
 
         self._build_ui()
         self._center()
@@ -67,8 +78,7 @@ class StorageManagerDialog(QDialog):
     def _center(self) -> None:
         """窗口居中显示。"""
         screen = QGuiApplication.primaryScreen().availableGeometry()
-        self.move(screen.center().x() - self.width() // 2,
-                  screen.center().y() - self.height() // 2)
+        self.move(screen.center().x() - self.width() // 2, screen.center().y() - self.height() // 2)
 
     def _build_ui(self) -> None:
         """构建界面布局。"""
@@ -155,15 +165,15 @@ class StorageManagerDialog(QDialog):
         self.term_list_widget = QListWidget()
         self.term_list_widget.setFrameShape(QFrame.NoFrame)
         self.term_list_widget.setFixedHeight(120)
-        self.term_list_widget.setStyleSheet(f"""
-            QListWidget {{
+        self.term_list_widget.setStyleSheet("""
+            QListWidget {
                 background: transparent;
                 border: none;
                 outline: none;
-            }}
-            QListWidget::item {{
+            }
+            QListWidget::item {
                 padding: 2px 2px;
-            }}
+            }
         """)
         self.term_list_widget.itemChanged.connect(self._on_term_check_changed)
         filter_layout.addWidget(self.term_list_widget)
@@ -373,8 +383,7 @@ class StorageManagerDialog(QDialog):
 
         # 筛选课程
         filtered = [
-            c for c in self._all_courses
-            if (c.get("term") or "未知学期") in self._selected_terms
+            c for c in self._all_courses if (c.get("term") or "未知学期") in self._selected_terms
         ]
 
         # 按课程名排序
@@ -425,8 +434,7 @@ class StorageManagerDialog(QDialog):
         files = self.store.list_files_by_course(course_id)
 
         # 按大小排序（默认降序）
-        files.sort(key=lambda f: f.get("size", 0) or 0,
-                   reverse=self._sort_by_size_desc)
+        files.sort(key=lambda f: f.get("size", 0) or 0, reverse=self._sort_by_size_desc)
 
         self.file_table.blockSignals(True)
         self.file_table.setRowCount(0)
@@ -507,8 +515,7 @@ class StorageManagerDialog(QDialog):
         self._populate_term_list()
         self._populate_course_list()
 
-    def _on_course_selected(self, current: QListWidgetItem,
-                            previous: QListWidgetItem) -> None:
+    def _on_course_selected(self, current: QListWidgetItem, previous: QListWidgetItem) -> None:
         """课程列表选中项变化。"""
         if current is None:
             self._selected_course_id = None
@@ -523,8 +530,7 @@ class StorageManagerDialog(QDialog):
         self._selected_course_id = course_id
 
         # 更新标题
-        course_data = next(
-            (c for c in self._all_courses if c["id"] == course_id), None)
+        course_data = next((c for c in self._all_courses if c["id"] == course_id), None)
         if course_data:
             name = course_data.get("name", "未知课程")
             total = course_data.get("files_total", 0) or 0
@@ -539,8 +545,7 @@ class StorageManagerDialog(QDialog):
     def _toggle_sort_by_size(self) -> None:
         """切换文件按大小排序的方向。"""
         self._sort_by_size_desc = not self._sort_by_size_desc
-        self.sort_size_btn.setText(
-            "按大小排序 ↓" if self._sort_by_size_desc else "按大小排序 ↑")
+        self.sort_size_btn.setText("按大小排序 ↓" if self._sort_by_size_desc else "按大小排序 ↑")
         if self._selected_course_id is not None:
             self._populate_file_list(self._selected_course_id)
 
@@ -608,11 +613,13 @@ class StorageManagerDialog(QDialog):
                 file_id = check_item.data(Qt.UserRole)
                 name_item = self.file_table.item(row, 1)
                 size_item = self.file_table.item(row, 2)
-                selected_files.append({
-                    "file_id": file_id,
-                    "name": name_item.text(),
-                    "size": size_item.data(Qt.UserRole) or 0,
-                })
+                selected_files.append(
+                    {
+                        "file_id": file_id,
+                        "name": name_item.text(),
+                        "size": size_item.data(Qt.UserRole) or 0,
+                    }
+                )
 
         if not selected_files:
             return
@@ -622,7 +629,8 @@ class StorageManagerDialog(QDialog):
 
         # 确认对话框
         confirm = QMessageBox.question(
-            self, "确认删除",
+            self,
+            "确认删除",
             f"确定要删除选中的 {count} 个文件吗？\n\n"
             f"将释放 {format_size(total_size)} 磁盘空间。\n"
             f"本地文件和同步记录都会被删除，下次同步时会重新下载。",
@@ -637,8 +645,8 @@ class StorageManagerDialog(QDialog):
 
         if deleted > 0:
             QMessageBox.information(
-                self, "删除完成",
-                f"已删除 {deleted} 个文件，释放 {format_size(total_size)} 空间。")
+                self, "删除完成", f"已删除 {deleted} 个文件，释放 {format_size(total_size)} 空间。"
+            )
             self.files_deleted.emit(deleted)
 
             # 刷新数据

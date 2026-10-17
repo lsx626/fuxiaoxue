@@ -9,6 +9,7 @@
 
 运行：python -m pytest elearning-sync/tests/test_deadlines_and_changes.py
 """
+
 from __future__ import annotations
 
 import os
@@ -18,11 +19,11 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from fudan_sync.crawler import Crawler, CrawlResult  # noqa: E402
-from fudan_sync.state import StateStore  # noqa: E402
-from fudan_sync.sync_engine import CourseInfo, SyncEngine  # noqa: E402
-from fudan_sync.downloader import DownloadResult, DownloadTask  # noqa: E402
 from fudan_sync.config import AppConfig  # noqa: E402
+from fudan_sync.crawler import Crawler, CrawlResult  # noqa: E402
+from fudan_sync.downloader import DownloadResult, DownloadTask  # noqa: E402
+from fudan_sync.state import StateStore  # noqa: E402
+from fudan_sync.sync_engine import SyncEngine  # noqa: E402
 
 
 class FakeAssignmentsApi:
@@ -35,14 +36,26 @@ class FakeAssignmentsApi:
 
     def iter_pages(self, path, params=None, max_pages=None):
         if "/assignments" in path:
-            return iter([
-                {"id": 1, "name": "作业一", "description": "见附件",
-                 "due_at": "2026-10-05T23:59:00Z", "html_url": "https://x/a1"},
-                {"id": 2, "name": "作业二", "description": "",
-                 "due_at": "2026-10-01T08:00:00Z", "html_url": "https://x/a2"},
-                # 无截止时间的作业也得能采集
-                {"id": 3, "name": "作业三", "description": "", "html_url": "https://x/a3"},
-            ])
+            return iter(
+                [
+                    {
+                        "id": 1,
+                        "name": "作业一",
+                        "description": "见附件",
+                        "due_at": "2026-10-05T23:59:00Z",
+                        "html_url": "https://x/a1",
+                    },
+                    {
+                        "id": 2,
+                        "name": "作业二",
+                        "description": "",
+                        "due_at": "2026-10-01T08:00:00Z",
+                        "html_url": "https://x/a2",
+                    },
+                    # 无截止时间的作业也得能采集
+                    {"id": 3, "name": "作业三", "description": "", "html_url": "https://x/a3"},
+                ]
+            )
         if "/files" in path:
             return iter([])
         if "/folders" in path:
@@ -88,30 +101,47 @@ class StoreAssignmentsTests(unittest.TestCase):
 
     def test_upsert_and_list_sorted_by_due(self):
         self.store.upsert_course(1, "机器学习", "CS229", "2025秋", "student", False)
-        self.store.upsert_assignments(1, [
-            {"assignment_id": 1, "name": "作业一", "due_at": "2026-10-05T23:59:00Z",
-             "html_url": "u1"},
-            {"assignment_id": 2, "name": "作业二", "due_at": "2026-10-01T08:00:00Z",
-             "html_url": "u2"},
-        ])
+        self.store.upsert_assignments(
+            1,
+            [
+                {
+                    "assignment_id": 1,
+                    "name": "作业一",
+                    "due_at": "2026-10-05T23:59:00Z",
+                    "html_url": "u1",
+                },
+                {
+                    "assignment_id": 2,
+                    "name": "作业二",
+                    "due_at": "2026-10-01T08:00:00Z",
+                    "html_url": "u2",
+                },
+            ],
+        )
         items = self.store.list_assignments()
         self.assertEqual([i["name"] for i in items], ["作业二", "作业一"])
         self.assertEqual(items[0]["course_name"], "机器学习")
 
     def test_upsert_replaces_per_course(self):
         self.store.upsert_course(1, "机器学习", "CS229", "2025秋", "student", False)
-        self.store.upsert_assignments(1, [
-            {"assignment_id": 1, "name": "作业一", "due_at": "2026-10-05T23:59:00Z"}])
-        self.store.upsert_assignments(1, [
-            {"assignment_id": 9, "name": "新作业", "due_at": "2026-11-01T00:00:00Z"}])
+        self.store.upsert_assignments(
+            1, [{"assignment_id": 1, "name": "作业一", "due_at": "2026-10-05T23:59:00Z"}]
+        )
+        self.store.upsert_assignments(
+            1, [{"assignment_id": 9, "name": "新作业", "due_at": "2026-11-01T00:00:00Z"}]
+        )
         items = self.store.list_assignments()
         self.assertEqual([i["name"] for i in items], ["新作业"])
 
     def test_du_without_due_excluded_from_list(self):
         self.store.upsert_course(1, "机器学习", "CS229", "2025秋", "student", False)
-        self.store.upsert_assignments(1, [
-            {"assignment_id": 1, "name": "作业一", "due_at": ""},
-            {"assignment_id": 2, "name": "作业二", "due_at": "2026-10-01T08:00:00Z"}])
+        self.store.upsert_assignments(
+            1,
+            [
+                {"assignment_id": 1, "name": "作业一", "due_at": ""},
+                {"assignment_id": 2, "name": "作业二", "due_at": "2026-10-01T08:00:00Z"},
+            ],
+        )
         items = self.store.list_assignments()
         self.assertEqual([i["name"] for i in items], ["作业二"])
 
@@ -126,13 +156,26 @@ class ChangeRecordTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _seed_file(self, file_id: int, filename: str, status: str = "pending"):
-        self.store.upsert_file({
-            "file_id": file_id, "course_id": 1, "filename": filename,
-            "display_name": filename, "size": 10, "content_type": "",
-            "folder_id": None, "folder_path": "", "created_at": "t1",
-            "updated_at": "t1", "modified_at": "t1", "locked_for_user": False,
-            "hidden": False, "source": "files", "context": "", "local_path": "",
-        })
+        self.store.upsert_file(
+            {
+                "file_id": file_id,
+                "course_id": 1,
+                "filename": filename,
+                "display_name": filename,
+                "size": 10,
+                "content_type": "",
+                "folder_id": None,
+                "folder_path": "",
+                "created_at": "t1",
+                "updated_at": "t1",
+                "modified_at": "t1",
+                "locked_for_user": False,
+                "hidden": False,
+                "source": "files",
+                "context": "",
+                "local_path": "",
+            }
+        )
         if status == "downloaded":
             self.store.mark_downloaded(file_id, f"/tmp/{filename}", 10)
 
@@ -150,15 +193,15 @@ class ChangeRecordTests(unittest.TestCase):
         self.store.trim_changes(keep=3)
         self.assertEqual(len(self.store.recent_changes(limit=100)), 3)
 
-    def test_removed_changes_recorded_before_marking(self):
-        # 文件本轮未见且仍非 remote_missing -> 应记 removed
+    def test_removed_changes_recorded_before_purge(self):
+        # 文件本轮未见 -> 清理记录前应记 removed
         self.store.upsert_course(1, "机器学习", "CS229", "2025秋", "student", False)
         self._seed_file(10, "gone.pdf", "downloaded")
         self.store.record_removed_changes(1, [999])
         changes = self.store.recent_changes(limit=10)
         self.assertEqual([c["change"] for c in changes], ["removed"])
-        # 标记之后再查：不再重复记录
-        self.store.mark_missing_files(1, [999])
+        # 清理之后再查：不再重复记录
+        self.store.purge_missing_files(1, [999], self.tmp.name)
         self.store.record_removed_changes(1, [999])
         self.assertEqual(len(self.store.recent_changes(limit=10)), 1)
 
@@ -166,11 +209,18 @@ class ChangeRecordTests(unittest.TestCase):
 class IcsExportTests(unittest.TestCase):
     def test_build_ics(self):
         from fudan_sync.gui.deadlines_dialog import _build_ics
-        ics = _build_ics([
-            {"id": 1, "name": "作业,一", "course_name": "机器;学习",
-             "due_at": "2026-10-05T23:59:00Z"},
-            {"id": 2, "name": "无时间作业", "course_name": "x", "due_at": ""},
-        ])
+
+        ics = _build_ics(
+            [
+                {
+                    "id": 1,
+                    "name": "作业,一",
+                    "course_name": "机器;学习",
+                    "due_at": "2026-10-05T23:59:00Z",
+                },
+                {"id": 2, "name": "无时间作业", "course_name": "x", "due_at": ""},
+            ]
+        )
         self.assertIn("BEGIN:VCALENDAR", ics)
         self.assertTrue(ics.endswith("\r\n"))  # 行尾必须是 CRLF
         self.assertIn("DTSTART:20261005T235900Z", ics)
@@ -185,8 +235,10 @@ class EngineChangeTests(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.cfg = AppConfig(root_dir=os.path.join(self.tmp.name, "files"),
-                             state_db=os.path.join(self.tmp.name, "st.db"))
+        self.cfg = AppConfig(
+            root_dir=os.path.join(self.tmp.name, "files"),
+            state_db=os.path.join(self.tmp.name, "st.db"),
+        )
         os.makedirs(self.cfg.root_dir, exist_ok=True)
         self.state = StateStore(self.cfg.state_db)
         self.state.upsert_course(1, "机器学习", "CS229", "2025秋", "student", False)
@@ -203,9 +255,15 @@ class EngineChangeTests(unittest.TestCase):
         with open(local, "w", encoding="utf-8") as handle:
             handle.write(content)
         task = DownloadTask(
-            file_id=file_id, course_id=1, filename=filename, folder_path="",
-            course_dir=self.cfg.root_dir, size=len(content),
-            api_path=f"/courses/1/files/{file_id}", fallback_url="")
+            file_id=file_id,
+            course_id=1,
+            filename=filename,
+            folder_path="",
+            course_directory=self.cfg.root_dir,
+            size=len(content),
+            api_path=f"/courses/1/files/{file_id}",
+            fallback_url="",
+        )
         result = DownloadResult(task)
         result.success = True
         result.local_path = local
@@ -213,14 +271,26 @@ class EngineChangeTests(unittest.TestCase):
         return result
 
     def _record(self, file_id, filename):
-        self.state.upsert_file({
-            "file_id": file_id, "course_id": 1, "filename": filename,
-            "display_name": filename, "size": 10, "content_type": "",
-            "folder_id": None, "folder_path": "", "created_at": "t1",
-            "updated_at": "t1", "modified_at": "t1", "locked_for_user": False,
-            "hidden": False, "source": "files", "context": "",
-            "local_path": os.path.join(self.cfg.root_dir, filename),
-        })
+        self.state.upsert_file(
+            {
+                "file_id": file_id,
+                "course_id": 1,
+                "filename": filename,
+                "display_name": filename,
+                "size": 10,
+                "content_type": "",
+                "folder_id": None,
+                "folder_path": "",
+                "created_at": "t1",
+                "updated_at": "t1",
+                "modified_at": "t1",
+                "locked_for_user": False,
+                "hidden": False,
+                "source": "files",
+                "context": "",
+                "local_path": os.path.join(self.cfg.root_dir, filename),
+            }
+        )
 
     def test_download_success_records_new(self):
         engine = self._engine()

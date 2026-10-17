@@ -7,33 +7,23 @@ import org.junit.Test
 /**
  * 展示层工具：课程名清洗（剥离内嵌选课代码）与速率/时长格式化。
  *
- * 课程名来自 Canvas，常内嵌选课代码（如「数据处理与数据库 DATA130012.01」）；
- * 用户明确不希望在课程列表里看到代码，清洗只在展示层做，数据库保持原名。
+ * 课程名来自 Canvas，常内嵌选课代码（如「数据处理与数据库 DATA130012.01」）； 用户明确不希望在课程列表里看到代码，清洗只在展示层做，数据库保持原名。
  */
 class FileUtilsDisplayTest {
 
     @Test
     fun cleanCourseName_stripsTrailingCode() {
-        assertEquals(
-            "数据处理与数据库",
-            FileUtils.cleanCourseName("数据处理与数据库 DATA130012.01")
-        )
+        assertEquals("数据处理与数据库", FileUtils.cleanCourseName("数据处理与数据库 DATA130012.01"))
     }
 
     @Test
     fun cleanCourseName_stripsLeadingCode() {
-        assertEquals(
-            "普通化学A（上）",
-            FileUtils.cleanCourseName("CHEM10003.03 普通化学A（上）")
-        )
+        assertEquals("普通化学A（上）", FileUtils.cleanCourseName("CHEM10003.03 普通化学A（上）"))
     }
 
     @Test
     fun cleanCourseName_stripsParenthesizedCode() {
-        assertEquals(
-            "机器学习导论",
-            FileUtils.cleanCourseName("机器学习导论（DATA130012.01）")
-        )
+        assertEquals("机器学习导论", FileUtils.cleanCourseName("机器学习导论（DATA130012.01）"))
     }
 
     @Test
@@ -61,10 +51,7 @@ class FileUtilsDisplayTest {
 
     @Test
     fun cleanCourseName_stripsMultipleCodes() {
-        assertEquals(
-            "复变函数",
-            FileUtils.cleanCourseName("复变函数 MATH120011.01 MATH120011.02")
-        )
+        assertEquals("复变函数", FileUtils.cleanCourseName("复变函数 MATH120011.01 MATH120011.02"))
     }
 
     @Test

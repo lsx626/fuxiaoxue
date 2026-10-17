@@ -3,6 +3,7 @@
 用户反馈课程列表里课程名前的选课代码没有阅读价值。清洗只在展示层做，
 数据库与本地目录仍用 Canvas 原名（路径语义必须与引擎一致，见 §12）。
 """
+
 from fudan_sync.utils import clean_course_name
 
 

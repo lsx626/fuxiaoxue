@@ -18,17 +18,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.zip.ZipInputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Office/ODF/压缩包等无法在应用内高保真渲染的格式的结构化降级预览。
  *
  * 策略（与桌面端“结构化解析降级”一致，且明确说明限制）：
- * 1. 对 OOXML（docx/xlsx/pptx）与 ODF（odt/ods/odp）做轻量文本抽取，
- *    只保证可读内容，不保证分页、图表、动画、宏和复杂布局保真。
+ * 1. 对 OOXML（docx/xlsx/pptx）与 ODF（odt/ods/odp）做轻量文本抽取， 只保证可读内容，不保证分页、图表、动画、宏和复杂布局保真。
  * 2. 清楚告知用户这是降级视图，可经分享/另存到其他工具做高保真处理。
  * 3. 旧二进制 .doc/.xls/.ppt 无法解析，直接说明不支持，不假装成功。
  */
@@ -43,13 +42,22 @@ fun OfficeFallbackScreen(file: File, displayName: String = file.name) {
     LaunchedEffect(file.absolutePath) {
         withContext(Dispatchers.IO) {
             when (ext) {
-                "docx", "pptx", "odt", "odp" -> {
+                "docx",
+                "pptx",
+                "odt",
+                "odp" -> {
                     note = "已提取正文文本（不含图片、图表、动画与复杂排版）"
-                    extracted = extractText(file, setOf("word/document.xml", "ppt/slides", "content.xml"))
+                    extracted =
+                        extractText(file, setOf("word/document.xml", "ppt/slides", "content.xml"))
                 }
-                "xlsx", "ods" -> {
+                "xlsx",
+                "ods" -> {
                     note = "已提取单元格文本（不含公式结果、样式与图表）"
-                    extracted = extractText(file, setOf("xl/sharedStrings.xml", "xl/worksheets", "content.xml"))
+                    extracted =
+                        extractText(
+                            file,
+                            setOf("xl/sharedStrings.xml", "xl/worksheets", "content.xml"),
+                        )
                 }
                 else -> {
                     note = "该格式无法在应用内解析内容，可通过分享交给其他工具处理"
@@ -63,36 +71,35 @@ fun OfficeFallbackScreen(file: File, displayName: String = file.name) {
         Text(
             displayName.ifBlank { file.name },
             style = MaterialTheme.typography.titleMedium,
-            maxLines = 2
+            maxLines = 2,
         )
         Text(
             note,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
+            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
         )
         val text = extracted
         if (text.isNullOrBlank()) {
             Text(
                 "暂时无法在应用内预览 ${ext.uppercase()} 格式的内容，可通过右上角分享交给其他工具查看。",
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
             Text(
                 "降级预览 · 最多显示前 ${MAX_CHARS} 字符",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(bottom = 8.dp)
+                modifier = Modifier.padding(bottom = 8.dp),
             )
             val scroll = rememberScrollState()
-            Box(
-                Modifier.fillMaxSize().verticalScroll(scroll)
-            ) {
+            Box(Modifier.fillMaxSize().verticalScroll(scroll)) {
                 Text(
                     text = text.take(MAX_CHARS),
-                    style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                    modifier = Modifier.fillMaxWidth()
+                    style =
+                        MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
@@ -102,11 +109,9 @@ fun OfficeFallbackScreen(file: File, displayName: String = file.name) {
 private const val MAX_CHARS = 200_000
 
 /**
- * 从 OOXML/ODF（本质是 zip）中按条目抽取纯文本：
- * 命中目标条目前缀时，剥离 XML 标签保留可见文字。
+ * 从 OOXML/ODF（本质是 zip）中按条目抽取纯文本： 命中目标条目前缀时，剥离 XML 标签保留可见文字。
  *
- * 安全约束：每个条目最多读 [MAX_CHARS] 个字符就停止（XML 标签剥离后最多
- * MAX_CHARS），避免「zip 炸弹」式的超大条目把整段内容读进内存导致 OOM。
+ * 安全约束：每个条目最多读 [MAX_CHARS] 个字符就停止（XML 标签剥离后最多 MAX_CHARS），避免「zip 炸弹」式的超大条目把整段内容读进内存导致 OOM。
  */
 private fun extractText(file: File, targets: Set<String>): String? {
     return try {

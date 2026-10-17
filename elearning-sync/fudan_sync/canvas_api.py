@@ -5,6 +5,7 @@
 - 分页（Link 头）: https://canvas.instructure.com/doc/api/file.pagination.html
 - 限流（429 + X-Rate-Limit-Remaining）: https://canvas.instructure.com/doc/api/file.throttling.html
 """
+
 from __future__ import annotations
 
 import time
@@ -48,10 +49,12 @@ class CanvasAPI:
         self._last_request_ts = 0.0
 
         self.session = requests.Session()
-        self.session.headers.update({
-            "Accept": "application/json",
-            "User-Agent": "FuXiaoXue/1.0 (Canvas LMS sync tool)",
-        })
+        self.session.headers.update(
+            {
+                "Accept": "application/json",
+                "User-Agent": "FuXiaoXue/1.0 (Canvas LMS sync tool)",
+            }
+        )
         auth.apply(self.session)
 
     # ------------------------------------------------------------------
@@ -66,60 +69,89 @@ class CanvasAPI:
         if self.log is not None:
             getattr(self.log, level)(msg, *args)
 
-    def request(self, method: str, url: str, *, params: Optional[Dict[str, Any]] = None,
-                data: Any = None, json_body: Any = None,
-                allow_redirects: bool = True) -> requests.Response:
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        data: Any = None,
+        json_body: Any = None,
+        allow_redirects: bool = True,
+    ) -> requests.Response:
         """带重试与限流处理的请求。"""
         attempt = 0
         while True:
             attempt += 1
             self._sleep_interval()
             try:
-                resp = self.session.request(
-                    method, url, params=params, data=data, json=json_body,
-                    timeout=self.timeout, allow_redirects=allow_redirects,
+                response = self.session.request(
+                    method,
+                    url,
+                    params=params,
+                    data=data,
+                    json=json_body,
+                    timeout=self.timeout,
+                    allow_redirects=allow_redirects,
                 )
             except requests.RequestException as exc:
                 if attempt > self.max_retries:
                     raise
-                backoff = min(2 ** attempt, 30)
-                self._log("warning", "网络错误 %s（第 %d 次重试，%ds 后）: %s",
-                          type(exc).__name__, attempt, backoff, exc)
+                backoff = min(2**attempt, 30)
+                self._log(
+                    "warning",
+                    "网络错误 %s（第 %d 次重试，%ds 后）: %s",
+                    type(exc).__name__,
+                    attempt,
+                    backoff,
+                    exc,
+                )
                 time.sleep(backoff)
                 continue
 
-            self._handle_rate_limit_headers(resp)
+            self._handle_rate_limit_headers(response)
 
-            if resp.status_code == 429 or (
-                resp.status_code == 403 and "Rate Limit Exceeded" in (resp.text or "")
+            if response.status_code == 429 or (
+                response.status_code == 403 and "Rate Limit Exceeded" in (response.text or "")
             ):
                 if attempt > self.max_retries:
                     raise RateLimitError(f"Canvas 限流，重试 {self.max_retries} 次后仍失败: {url}")
-                retry_after = self._parse_retry_after(resp)
-                self._log("warning", "触发限流（429），等待 %.0fs 后重试（第 %d 次）",
-                          retry_after, attempt)
+                retry_after = self._parse_retry_after(response)
+                self._log(
+                    "warning",
+                    "触发限流（429），等待 %.0fs 后重试（第 %d 次）",
+                    retry_after,
+                    attempt,
+                )
                 time.sleep(retry_after)
                 continue
 
-            if 500 <= resp.status_code < 600:
+            if 500 <= response.status_code < 600:
                 if attempt > self.max_retries:
-                    resp.raise_for_status()
-                backoff = min(2 ** attempt, 30)
-                self._log("warning", "服务端错误 %d（第 %d 次重试，%ds 后）: %s",
-                          resp.status_code, attempt, backoff, url)
+                    response.raise_for_status()
+                backoff = min(2**attempt, 30)
+                self._log(
+                    "warning",
+                    "服务端错误 %d（第 %d 次重试，%ds 后）: %s",
+                    response.status_code,
+                    attempt,
+                    backoff,
+                    url,
+                )
                 time.sleep(backoff)
                 continue
 
-            if 400 <= resp.status_code < 500 and resp.status_code != 404:
+            if 400 <= response.status_code < 500 and response.status_code != 404:
                 # 记录可读错误信息后抛出（404 由调用方按业务处理）
-                self._log("error", "API 返回 %d: %s", resp.status_code,
-                          (resp.text or "")[:300])
-            resp.raise_for_status()
-            return resp
+                self._log(
+                    "error", "API 返回 %d: %s", response.status_code, (response.text or "")[:300]
+                )
+            response.raise_for_status()
+            return response
 
-    def _handle_rate_limit_headers(self, resp: requests.Response) -> None:
+    def _handle_rate_limit_headers(self, response: requests.Response) -> None:
         """根据剩余配额主动休眠，避免撞上 429。"""
-        remaining = resp.headers.get("X-Rate-Limit-Remaining")
+        remaining = response.headers.get("X-Rate-Limit-Remaining")
         if remaining is None:
             return
         try:
@@ -132,26 +164,27 @@ class CanvasAPI:
             time.sleep(sleep_for)
 
     @staticmethod
-    def _parse_retry_after(resp: requests.Response) -> float:
-        raw = resp.headers.get("Retry-After")
+    def _parse_retry_after(response: requests.Response) -> float:
+        raw = response.headers.get("Retry-After")
         if raw:
             try:
                 return max(float(raw), 1.0)
             except (TypeError, ValueError):
                 pass
-        return min(2 ** 3, 30.0)
+        return min(2**3, 30.0)
 
     # ------------------------------------------------------------------
     def get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
         """GET 一个 API 路径，返回解析后的 JSON。"""
         url = self._abs(path)
-        resp = self.request("GET", url, params=params)
-        if resp.status_code == 204 or not resp.content:
+        response = self.request("GET", url, params=params)
+        if response.status_code == 204 or not response.content:
             return None
-        return resp.json()
+        return response.json()
 
-    def iter_pages(self, path: str, params: Optional[Dict[str, Any]] = None,
-                   max_pages: Optional[int] = None) -> Iterator[Any]:
+    def iter_pages(
+        self, path: str, params: Optional[Dict[str, Any]] = None, max_pages: Optional[int] = None
+    ) -> Iterator[Any]:
         """迭代分页结果，自动跟随 Link 头的 rel=next。
 
         Link 头被当作不透明 URL 处理，因此兼容 page=N 与 page=bookmark:xxx 两种分页。
@@ -160,10 +193,10 @@ class CanvasAPI:
         page = 0
         while url:
             page += 1
-            resp = self.request("GET", url, params=params if page == 1 else None)
-            if not resp.content:
+            response = self.request("GET", url, params=params if page == 1 else None)
+            if not response.content:
                 return
-            payload = resp.json()
+            payload = response.json()
             if isinstance(payload, list):
                 if not payload:  # 空页，结束
                     return
@@ -172,21 +205,21 @@ class CanvasAPI:
                 yield payload
                 return
 
-            next_url = self._next_link(resp)
+            next_url = self._next_link(response)
             url = next_url
             params = None  # next 链接已含全部参数
             if max_pages and page >= max_pages:
                 return
 
     @staticmethod
-    def _next_link(resp: requests.Response) -> Optional[str]:
+    def _next_link(response: requests.Response) -> Optional[str]:
         """从 Link 头解析 rel=next（头名大小写不敏感）。"""
-        links = getattr(resp, "links", None) or {}
+        links = getattr(response, "links", None) or {}
         nxt = links.get("next")
         if isinstance(nxt, dict) and nxt.get("url"):
             return nxt["url"]
         # requests.links 未命中时，手动解析原始头（大小写不敏感）
-        raw = resp.headers.get("Link") or resp.headers.get("link")
+        raw = response.headers.get("Link") or response.headers.get("link")
         if not raw:
             return None
         for part in raw.split(","):
@@ -194,7 +227,7 @@ class CanvasAPI:
                 start = part.find("<")
                 end = part.find(">")
                 if start != -1 and end != -1 and end > start:
-                    return part[start + 1:end]
+                    return part[start + 1 : end]
         return None
 
     def _abs(self, path: str) -> str:
@@ -210,13 +243,13 @@ class CanvasAPI:
     def get_current_user(self) -> Dict[str, Any]:
         return self.get("/users/self") or {}
 
-    def list_courses(self, enrollment_type: str = "student",
-                     only_favorites: bool = False) -> List[Dict[str, Any]]:
+    def list_courses(
+        self, enrollment_type: str = "student", only_favorites: bool = False
+    ) -> List[Dict[str, Any]]:
         """列出当前用户可见课程（含学期信息）。"""
         courses: List[Dict[str, Any]] = []
         if only_favorites:
-            for item in self.iter_pages("/users/self/favorites/courses",
-                                        params={"per_page": 100}):
+            for item in self.iter_pages("/users/self/favorites/courses", params={"per_page": 100}):
                 item.setdefault("is_favorite", True)
                 courses.append(item)
         else:
@@ -232,8 +265,7 @@ class CanvasAPI:
         return courses
 
     def get_course(self, course_id: int) -> Dict[str, Any]:
-        return self.get(f"/courses/{course_id}",
-                        params={"include[]": "term,syllabus_body"}) or {}
+        return self.get(f"/courses/{course_id}", params={"include[]": "term,syllabus_body"}) or {}
 
     def list_favorite_ids(self) -> List[int]:
         return [int(c["id"]) for c in self.list_courses(only_favorites=True) if c.get("id")]

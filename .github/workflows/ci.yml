@@ -29,7 +29,12 @@ jobs:
         working-directory: elearning-sync
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pytest
+          python -m pip install -r requirements.txt pytest ruff==0.14.0
+
+      - name: Python 代码风格
+        run: |
+          ruff format --check elearning-sync
+          ruff check elearning-sync
 
       - name: 发布环境导入探针（Office/图片/配置解析栈必须可用）
         working-directory: elearning-sync
@@ -66,6 +71,6 @@ jobs:
 
       - name: 构建与测试
         working-directory: android-app
-        run: ./gradlew --console=plain --no-daemon lintDebug testDebugUnitTest assembleDebug
+        run: ./gradlew --console=plain --no-daemon spotlessCheck lintDebug testDebugUnitTest assembleDebug
         env:
           JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8

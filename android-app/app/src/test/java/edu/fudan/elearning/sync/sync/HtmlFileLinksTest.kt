@@ -9,28 +9,35 @@ class HtmlFileLinksTest {
 
     @Test
     fun extractsCanvasFileLinkForms() {
-        val html = """
+        val html =
+            """
             <p><a href="/courses/123/files/456/download?verifier=abc">讲义</a></p>
             <img src="/courses/123/files/789/preview">
             <a href="https://elearning.fudan.edu.cn/api/v1/courses/123/files/1010">API 形式</a>
-        """.trimIndent()
+        """
+                .trimIndent()
         assertEquals(setOf(456L, 789L, 1010L), HtmlFileLinks.extractFileIds(html))
     }
 
     @Test
     fun extractsPreviewShorthand() {
-        assertEquals(setOf(42L), HtmlFileLinks.extractFileIds("<a href=\"/files/42/preview\">x</a>"))
+        assertEquals(
+            setOf(42L),
+            HtmlFileLinks.extractFileIds("<a href=\"/files/42/preview\">x</a>"),
+        )
     }
 
     @Test
     fun deduplicatesAndIgnoresUnrelatedLinks() {
-        val html = """
+        val html =
+            """
             <a href="/courses/1/files/9/download">a</a>
             <a href="/courses/1/files/9/preview">b</a>
             <a href="/courses/1/pages/intro">页面</a>
             <a href="/courses/1/assignments/3">作业</a>
             <a href="https://example.com/x.pdf">外链</a>
-        """.trimIndent()
+        """
+                .trimIndent()
         assertEquals(setOf(9L), HtmlFileLinks.extractFileIds(html))
     }
 

@@ -1,6 +1,5 @@
 package edu.fudan.elearning.sync.office
 
-import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -10,8 +9,8 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.Layout
-import android.text.StaticLayout
 import android.text.SpannableStringBuilder
+import android.text.StaticLayout
 import android.text.TextPaint
 import android.text.style.AbsoluteSizeSpan
 import android.text.style.ForegroundColorSpan
@@ -44,13 +43,21 @@ object PageRenderer {
     /** ARGB Long -> Int 颜色。 */
     private fun Long.toIntColor(): Int = this.toInt()
 
-    /**
-     * Word 流式文档分页：按段落/表格真实高度切页，尽量贴近原阅读器版式。
-     */
+    /** Word 流式文档分页：按段落/表格真实高度切页，尽量贴近原阅读器版式。 */
     fun paginate(doc: FlowDocument): List<DocPage> {
         if (doc.blocks.isEmpty()) {
-            return listOf(DocPage(doc.pageWidthPx, doc.pageHeightPx,
-                listOf(PageItem.Fill(Rect4(0f, 0f, doc.pageWidthPx.toFloat(), doc.pageHeightPx.toFloat()), 0xFFFFFFFF))))
+            return listOf(
+                DocPage(
+                    doc.pageWidthPx,
+                    doc.pageHeightPx,
+                    listOf(
+                        PageItem.Fill(
+                            Rect4(0f, 0f, doc.pageWidthPx.toFloat(), doc.pageHeightPx.toFloat()),
+                            0xFFFFFFFF,
+                        )
+                    ),
+                )
+            )
         }
         val pages = mutableListOf<DocPage>()
         val contentW = (doc.pageWidthPx - 2 * doc.marginPx).toFloat()
@@ -73,11 +80,11 @@ object PageRenderer {
                     paint.textSize = firstRun?.sizePx ?: 13f
                     paint.color = (firstRun?.argb ?: 0xFF1A1A1A).toIntColor()
                     val sb = buildSpannable(block.para)
-                    val layout = StaticLayout.Builder.obtain(
-                        sb, 0, sb.length, paint, contentW.roundToInt()
-                    ).setAlignment(alignOf(block.para.align))
-                        .setLineSpacing(0f, 1.25f)
-                        .build()
+                    val layout =
+                        StaticLayout.Builder.obtain(sb, 0, sb.length, paint, contentW.roundToInt())
+                            .setAlignment(alignOf(block.para.align))
+                            .setLineSpacing(0f, 1.25f)
+                            .build()
                     val h = layout.height + block.para.spaceAfterPx
                     if (y + h > doc.pageHeightPx - doc.marginPx && items.isNotEmpty()) {
                         flushPage()
@@ -101,21 +108,26 @@ object PageRenderer {
                         }
                     } else if (w > contentW) {
                         val r = contentW / w
-                        w *= r; h *= r
+                        w *= r
+                        h *= r
                     }
                     // 超高图片最多占一页可用高度的 85%，避免单图撑爆内存
                     val maxH = contentH * 0.85f
                     if (h > maxH) {
                         val r = maxH / h
-                        w *= r; h *= r
+                        w *= r
+                        h *= r
                     }
                     if (y + h > doc.pageHeightPx - doc.marginPx && items.isNotEmpty()) {
                         flushPage()
                     }
-                    items.add(PageItem.Image(
-                        Rect4(doc.marginPx, y, doc.marginPx + w, y + h),
-                        block.bytes, block.mime
-                    ))
+                    items.add(
+                        PageItem.Image(
+                            Rect4(doc.marginPx, y, doc.marginPx + w, y + h),
+                            block.bytes,
+                            block.mime,
+                        )
+                    )
                     y += h + 8f
                 }
                 is FlowBlock.Spacer -> {
@@ -146,10 +158,13 @@ object PageRenderer {
                         if (y + chunkH > doc.pageHeightPx - doc.marginPx && items.isNotEmpty()) {
                             flushPage()
                         }
-                        items.add(PageItem.Table(
-                            Rect4(doc.marginPx, y, doc.pageWidthPx - doc.marginPx, y + chunkH),
-                            chunkRows, colWs
-                        ))
+                        items.add(
+                            PageItem.Table(
+                                Rect4(doc.marginPx, y, doc.pageWidthPx - doc.marginPx, y + chunkH),
+                                chunkRows,
+                                colWs,
+                            )
+                        )
                         y += chunkH
                     }
                 }
@@ -165,8 +180,7 @@ object PageRenderer {
     /**
      * 列权重 -> 绝对像素宽（按内容宽度归一化）；权重缺失或列数不符则均分。
      *
-     * 24px 下限施加后再做一次总宽归一化：列数很多时（如 40 列 × 880px 内容宽）
-     * 直接 clamp 会让总宽 960 > 880，右边的列被画到页边距外裁掉。归一化后
+     * 24px 下限施加后再做一次总宽归一化：列数很多时（如 40 列 × 880px 内容宽） 直接 clamp 会让总宽 960 > 880，右边的列被画到页边距外裁掉。归一化后
      * 各列允许窄于 24px，但总宽恒等于内容宽度。
      */
     private fun columnWidths(ncol: Int, weights: List<Float>, contentW: Float): List<Float> {
@@ -175,8 +189,7 @@ object PageRenderer {
             val sum = weights.sum()
             val clamped = weights.map { (it / sum * contentW).coerceAtLeast(24f) }
             val total = clamped.sum()
-            return if (total <= contentW) clamped
-            else clamped.map { it / total * contentW }
+            return if (total <= contentW) clamped else clamped.map { it / total * contentW }
         }
         return List(ncol) { contentW / ncol }
     }
@@ -184,7 +197,8 @@ object PageRenderer {
     /** 实测一行高度：取行内各单元文本换行后的最大高度。列数不匹配时按均分重算。 */
     private fun measureRowHeight(row: DocRow, colWs: List<Float>): Float {
         if (row.cells.isEmpty()) return MIN_ROW_H
-        val widths = if (row.cells.size == colWs.size) colWs
+        val widths =
+            if (row.cells.size == colWs.size) colWs
             else List(row.cells.size) { colWs.sum() / row.cells.size }
         var maxH = 0f
         row.cells.forEachIndexed { i, cell ->
@@ -193,9 +207,16 @@ object PageRenderer {
             paint.textSize = cell.sizePx
             paint.isFakeBoldText = cell.bold
             val w = (widths[i] - 2 * CELL_PADDING).roundToInt().coerceAtLeast(1)
-            val layout = StaticLayout.Builder.obtain(
-                SpannableStringBuilder(cell.text), 0, cell.text.length, paint, w
-            ).setLineSpacing(0f, 1.2f).build()
+            val layout =
+                StaticLayout.Builder.obtain(
+                        SpannableStringBuilder(cell.text),
+                        0,
+                        cell.text.length,
+                        paint,
+                        w,
+                    )
+                    .setLineSpacing(0f, 1.2f)
+                    .build()
             val lh = layout.height.toFloat()
             if (lh > maxH) maxH = lh
         }
@@ -205,20 +226,23 @@ object PageRenderer {
     /** 解码图片真实宽高比；失败返回 -1。 */
     private fun decodeRatio(bytes: ByteArray): Float {
         return runCatching {
-            val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
-            if (opts.outWidth > 0 && opts.outHeight > 0) {
-                opts.outWidth.toFloat() / opts.outHeight.toFloat()
-            } else -1f
-        }.getOrDefault(-1f)
+                val opts =
+                    android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                if (opts.outWidth > 0 && opts.outHeight > 0) {
+                    opts.outWidth.toFloat() / opts.outHeight.toFloat()
+                } else -1f
+            }
+            .getOrDefault(-1f)
     }
 
-    private fun alignOf(align: DocAlign): Layout.Alignment = when (align) {
-        DocAlign.CENTER -> Layout.Alignment.ALIGN_CENTER
-        DocAlign.END -> Layout.Alignment.ALIGN_OPPOSITE
-        DocAlign.JUSTIFY -> Layout.Alignment.ALIGN_NORMAL
-        DocAlign.START -> Layout.Alignment.ALIGN_NORMAL
-    }
+    private fun alignOf(align: DocAlign): Layout.Alignment =
+        when (align) {
+            DocAlign.CENTER -> Layout.Alignment.ALIGN_CENTER
+            DocAlign.END -> Layout.Alignment.ALIGN_OPPOSITE
+            DocAlign.JUSTIFY -> Layout.Alignment.ALIGN_NORMAL
+            DocAlign.START -> Layout.Alignment.ALIGN_NORMAL
+        }
 
     /** 拼接富文本：字号/颜色/加粗斜体/下划线。 */
     private fun buildSpannable(para: DocParagraph): SpannableStringBuilder {
@@ -227,25 +251,49 @@ object PageRenderer {
             val start = sb.length
             sb.append(run.text)
             val end = sb.length
-            sb.setSpan(AbsoluteSizeSpan(run.sizePx.roundToInt()), start, end,
-                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            sb.setSpan(
+                AbsoluteSizeSpan(run.sizePx.roundToInt()),
+                start,
+                end,
+                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
             run.argb?.let {
-                sb.setSpan(ForegroundColorSpan(it.toIntColor()), start, end,
-                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                sb.setSpan(
+                    ForegroundColorSpan(it.toIntColor()),
+                    start,
+                    end,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
             }
             if (run.bold && run.italic) {
-                sb.setSpan(StyleSpan(Typeface.BOLD_ITALIC), start, end,
-                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                sb.setSpan(
+                    StyleSpan(Typeface.BOLD_ITALIC),
+                    start,
+                    end,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
             } else if (run.bold) {
-                sb.setSpan(StyleSpan(Typeface.BOLD), start, end,
-                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                sb.setSpan(
+                    StyleSpan(Typeface.BOLD),
+                    start,
+                    end,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
             } else if (run.italic) {
-                sb.setSpan(StyleSpan(Typeface.ITALIC), start, end,
-                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                sb.setSpan(
+                    StyleSpan(Typeface.ITALIC),
+                    start,
+                    end,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
             }
             if (run.underline) {
-                sb.setSpan(UnderlineSpan(), start, end,
-                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                sb.setSpan(
+                    UnderlineSpan(),
+                    start,
+                    end,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+                )
             }
         }
         return sb
@@ -275,11 +323,12 @@ object PageRenderer {
 
     /** 直线 + 两端箭头（连接线、装饰箭头等）。 */
     private fun drawLine(canvas: Canvas, item: PageItem.Line) {
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = item.argb.toIntColor()
-            strokeWidth = item.widthPx
-            strokeCap = Paint.Cap.ROUND
-        }
+        val paint =
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = item.argb.toIntColor()
+                strokeWidth = item.widthPx
+                strokeCap = Paint.Cap.ROUND
+            }
         canvas.drawLine(item.x1, item.y1, item.x2, item.y2, paint)
         val dx = item.x2 - item.x1
         val dy = item.y2 - item.y1
@@ -297,25 +346,32 @@ object PageRenderer {
     }
 
     /** 在 (x, y) 处画一个指向 (ux, uy) 方向的实心箭头。 */
-    private fun drawArrowHead(canvas: Canvas, x: Float, y: Float,
-                              ux: Float, uy: Float, size: Float, paint: Paint) {
+    private fun drawArrowHead(
+        canvas: Canvas,
+        x: Float,
+        y: Float,
+        ux: Float,
+        uy: Float,
+        size: Float,
+        paint: Paint,
+    ) {
         val px = -uy
         val py = ux
         val half = size * 0.5f
-        val path = Path().apply {
-            moveTo(x, y)
-            lineTo(x - ux * size + px * half, y - uy * size + py * half)
-            lineTo(x - ux * size - px * half, y - uy * size - py * half)
-            close()
-        }
+        val path =
+            Path().apply {
+                moveTo(x, y)
+                lineTo(x - ux * size + px * half, y - uy * size + py * half)
+                lineTo(x - ux * size - px * half, y - uy * size - py * half)
+                close()
+            }
         canvas.drawPath(path, Paint(paint).apply { style = Paint.Style.FILL })
     }
 
     /**
      * 自选形状：按几何生成 Path，先填充后描边，整体围绕形状中心旋转。
      *
-     * 未在 [ShapeGeometry] 中建模的形状退化为矩形（[ShapeGeometry.OTHER]），
-     * 保持「位置与配色正确、细节不保证」的诚实降级。
+     * 未在 [ShapeGeometry] 中建模的形状退化为矩形（[ShapeGeometry.OTHER]）， 保持「位置与配色正确、细节不保证」的诚实降级。
      */
     private fun drawShape(canvas: Canvas, item: PageItem.Shape) {
         if (item.fill == null && item.stroke == null) return
@@ -327,50 +383,68 @@ object PageRenderer {
         }
         val path = pathFor(item.geometry, rect)
         item.fill?.let { argb ->
-            canvas.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = argb.toIntColor()
-                style = Paint.Style.FILL
-            })
+            canvas.drawPath(
+                path,
+                Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = argb.toIntColor()
+                    style = Paint.Style.FILL
+                },
+            )
         }
         item.stroke?.let { argb ->
-            canvas.drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = argb.toIntColor()
-                style = Paint.Style.STROKE
-                strokeWidth = item.strokeWidthPx
-                strokeJoin = Paint.Join.ROUND
-                strokeCap = Paint.Cap.ROUND
-            })
+            canvas.drawPath(
+                path,
+                Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = argb.toIntColor()
+                    style = Paint.Style.STROKE
+                    strokeWidth = item.strokeWidthPx
+                    strokeJoin = Paint.Join.ROUND
+                    strokeCap = Paint.Cap.ROUND
+                },
+            )
         }
         canvas.restore()
     }
 
-    /**
-     * 占位卡：图表 / SmartArt / OLE 嵌入 / 视频等无法高保真还原的元素。
-     * 浅灰圆角 + 虚线边框 + 说明文字，明确告知限制，不假装成功。
-     */
+    /** 占位卡：图表 / SmartArt / OLE 嵌入 / 视频等无法高保真还原的元素。 浅灰圆角 + 虚线边框 + 说明文字，明确告知限制，不假装成功。 */
     private fun drawPlaceholder(canvas: Canvas, item: PageItem.Placeholder) {
         val rect = item.rect.toRectF()
         if (rect.width() <= 1f || rect.height() <= 1f) return
         val radius = 12f
-        canvas.drawRoundRect(rect, radius, radius, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = PLACEHOLDER_FILL.toIntColor()
-        })
-        canvas.drawRoundRect(rect, radius, radius, Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = PLACEHOLDER_STROKE.toIntColor()
-            style = Paint.Style.STROKE
-            strokeWidth = 2f
-            pathEffect = DashPathEffect(floatArrayOf(12f, 8f), 0f)
-        })
-        val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            textSize = (rect.height() * 0.16f).coerceIn(12f, 26f)
-            color = PLACEHOLDER_TEXT.toIntColor()
-        }
+        canvas.drawRoundRect(
+            rect,
+            radius,
+            radius,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = PLACEHOLDER_FILL.toIntColor() },
+        )
+        canvas.drawRoundRect(
+            rect,
+            radius,
+            radius,
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = PLACEHOLDER_STROKE.toIntColor()
+                style = Paint.Style.STROKE
+                strokeWidth = 2f
+                pathEffect = DashPathEffect(floatArrayOf(12f, 8f), 0f)
+            },
+        )
+        val paint =
+            TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+                textSize = (rect.height() * 0.16f).coerceIn(12f, 26f)
+                color = PLACEHOLDER_TEXT.toIntColor()
+            }
         val textWidth = (rect.width() - 24f).roundToInt().coerceAtLeast(1)
-        val layout = StaticLayout.Builder.obtain(
-            SpannableStringBuilder(item.label), 0, item.label.length, paint, textWidth
-        ).setAlignment(Layout.Alignment.ALIGN_CENTER)
-            .setLineSpacing(0f, 1.15f)
-            .build()
+        val layout =
+            StaticLayout.Builder.obtain(
+                    SpannableStringBuilder(item.label),
+                    0,
+                    item.label.length,
+                    paint,
+                    textWidth,
+                )
+                .setAlignment(Layout.Alignment.ALIGN_CENTER)
+                .setLineSpacing(0f, 1.15f)
+                .build()
         canvas.save()
         canvas.translate(rect.left + 12f, rect.centerY() - layout.height / 2f)
         layout.draw(canvas)
@@ -387,22 +461,34 @@ object PageRenderer {
         val w = rect.width()
         val h = rect.height()
         when (geometry) {
-            ShapeGeometry.RECT, ShapeGeometry.OTHER, ShapeGeometry.CALLOUT ->
-                path.addRect(rect, Path.Direction.CW)
-            ShapeGeometry.ROUND_RECT, ShapeGeometry.FLOWCHART_PROCESS -> {
+            ShapeGeometry.RECT,
+            ShapeGeometry.OTHER,
+            ShapeGeometry.CALLOUT -> path.addRect(rect, Path.Direction.CW)
+            ShapeGeometry.ROUND_RECT,
+            ShapeGeometry.FLOWCHART_PROCESS -> {
                 val radius = minOf(w, h) * 0.18f
                 path.addRoundRect(rect, radius, radius, Path.Direction.CW)
             }
             ShapeGeometry.ELLIPSE -> path.addOval(rect, Path.Direction.CW)
             ShapeGeometry.TRIANGLE -> {
-                path.moveTo(rect.centerX(), t); path.lineTo(r, b); path.lineTo(l, b); path.close()
+                path.moveTo(rect.centerX(), t)
+                path.lineTo(r, b)
+                path.lineTo(l, b)
+                path.close()
             }
             ShapeGeometry.RT_TRIANGLE -> {
-                path.moveTo(l, t); path.lineTo(l, b); path.lineTo(r, b); path.close()
+                path.moveTo(l, t)
+                path.lineTo(l, b)
+                path.lineTo(r, b)
+                path.close()
             }
-            ShapeGeometry.DIAMOND, ShapeGeometry.FLOWCHART_DECISION -> {
-                path.moveTo(rect.centerX(), t); path.lineTo(r, rect.centerY())
-                path.lineTo(rect.centerX(), b); path.lineTo(l, rect.centerY()); path.close()
+            ShapeGeometry.DIAMOND,
+            ShapeGeometry.FLOWCHART_DECISION -> {
+                path.moveTo(rect.centerX(), t)
+                path.lineTo(r, rect.centerY())
+                path.lineTo(rect.centerX(), b)
+                path.lineTo(l, rect.centerY())
+                path.close()
             }
             ShapeGeometry.PENTAGON -> {
                 path.moveTo(rect.centerX(), t)
@@ -422,7 +508,8 @@ object PageRenderer {
                 path.lineTo(l + notch, rect.centerY())
                 path.close()
             }
-            ShapeGeometry.RIGHT_ARROW, ShapeGeometry.LEFT_ARROW -> {
+            ShapeGeometry.RIGHT_ARROW,
+            ShapeGeometry.LEFT_ARROW -> {
                 val right = geometry == ShapeGeometry.RIGHT_ARROW
                 val shaft = h * 0.5f
                 val head = w * 0.45f
@@ -445,7 +532,8 @@ object PageRenderer {
                 }
                 path.close()
             }
-            ShapeGeometry.UP_ARROW, ShapeGeometry.DOWN_ARROW -> {
+            ShapeGeometry.UP_ARROW,
+            ShapeGeometry.DOWN_ARROW -> {
                 val up = geometry == ShapeGeometry.UP_ARROW
                 val shaft = w * 0.5f
                 val head = h * 0.45f
@@ -487,7 +575,8 @@ object PageRenderer {
                 path.lineTo(rect.centerX() - armX, rect.centerY() - armY)
                 path.close()
             }
-            ShapeGeometry.LEFT_BRACE, ShapeGeometry.RIGHT_BRACE -> {
+            ShapeGeometry.LEFT_BRACE,
+            ShapeGeometry.RIGHT_BRACE -> {
                 // 花括号只画折线轮廓，不填充（近似还原，细节不保证）
                 val left = geometry == ShapeGeometry.LEFT_BRACE
                 val outerX = if (left) r else l
@@ -522,16 +611,17 @@ object PageRenderer {
 
     private fun drawImage(canvas: Canvas, item: PageItem.Image) {
         runCatching {
-            val opts = android.graphics.BitmapFactory.Options().apply {
-                inJustDecodeBounds = true
-            }
+            val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
             android.graphics.BitmapFactory.decodeByteArray(item.bytes, 0, item.bytes.size, opts)
             val sample = (opts.outWidth / item.rect.width).toInt().coerceAtLeast(1)
-            val opts2 = android.graphics.BitmapFactory.Options().apply {
-                inSampleSize = sample
-            }
-            val src = android.graphics.BitmapFactory.decodeByteArray(item.bytes, 0, item.bytes.size, opts2)
-                ?: return@runCatching
+            val opts2 = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+            val src =
+                android.graphics.BitmapFactory.decodeByteArray(
+                    item.bytes,
+                    0,
+                    item.bytes.size,
+                    opts2,
+                ) ?: return@runCatching
             val srcW = src.width.toFloat()
             val srcH = src.height.toFloat()
             val target = item.rect.toRectF()
@@ -563,22 +653,24 @@ object PageRenderer {
             paint.color = (first.argb ?: 0xFF1A1A1A).toIntColor()
             val sb = buildSpannable(para)
             val w = rect.width().roundToInt().coerceAtLeast(1)
-            val layout = StaticLayout.Builder.obtain(sb, 0, sb.length, paint, w)
-                .setAlignment(alignOf(para.align))
-                // 必须与分页测量（paginate）使用同一行距倍数，否则分页算出的
-                // 高度比实际画出来的大，段尾积累空白、换页偏早
-                .setLineSpacing(0f, 1.25f)
-                .build()
+            val layout =
+                StaticLayout.Builder.obtain(sb, 0, sb.length, paint, w)
+                    .setAlignment(alignOf(para.align))
+                    // 必须与分页测量（paginate）使用同一行距倍数，否则分页算出的
+                    // 高度比实际画出来的大，段尾积累空白、换页偏早
+                    .setLineSpacing(0f, 1.25f)
+                    .build()
             layouts.add(layout to para.spaceAfterPx)
             totalH += layout.height + para.spaceAfterPx
         }
         if (layouts.isEmpty()) return
         // 垂直对齐：文本框的 TOP / MIDDLE / BOTTOM
-        var y = when (item.valign) {
-            VerticalAlign.MIDDLE -> rect.top + (rect.height() - totalH) / 2f
-            VerticalAlign.BOTTOM -> rect.bottom - totalH
-            VerticalAlign.TOP -> rect.top
-        }.coerceAtLeast(rect.top)
+        var y =
+            when (item.valign) {
+                VerticalAlign.MIDDLE -> rect.top + (rect.height() - totalH) / 2f
+                VerticalAlign.BOTTOM -> rect.bottom - totalH
+                VerticalAlign.TOP -> rect.top
+            }.coerceAtLeast(rect.top)
         canvas.save()
         if (item.rotationDeg != 0f) {
             canvas.rotate(item.rotationDeg, rect.centerX(), rect.centerY())
@@ -603,30 +695,39 @@ object PageRenderer {
         for (row in table.rows) {
             val ncell = row.cells.size.coerceAtLeast(1)
             // 有显式列宽且列数匹配时用列宽，否则按行内单元数均分
-            val widths = table.columnWidths?.takeIf { it.size == ncell }
-                ?: List(ncell) { table.rect.width / ncell }
+            val widths =
+                table.columnWidths?.takeIf { it.size == ncell }
+                    ?: List(ncell) { table.rect.width / ncell }
             var x = table.rect.left
             row.cells.forEachIndexed { i, cell ->
                 val cw = widths[i]
                 val rectF = RectF(x, y, x + cw, y + row.heightPx)
-                cell.fill?.let {
-                    canvas.drawRect(rectF, Paint().apply { color = it.toIntColor() })
-                }
+                cell.fill?.let { canvas.drawRect(rectF, Paint().apply { color = it.toIntColor() }) }
                 // 边框
-                canvas.drawRect(rectF, Paint().apply {
-                    color = 0xFFC8CDD2.toIntColor()
-                    style = Paint.Style.STROKE
-                    strokeWidth = 1f
-                })
+                canvas.drawRect(
+                    rectF,
+                    Paint().apply {
+                        color = 0xFFC8CDD2.toIntColor()
+                        style = Paint.Style.STROKE
+                        strokeWidth = 1f
+                    },
+                )
                 if (cell.text.isNotEmpty()) {
                     val paint = TextPaint(Paint.ANTI_ALIAS_FLAG)
                     paint.textSize = cell.sizePx
                     paint.color = (cell.argb ?: 0xFF1A1A1A).toIntColor()
                     paint.isFakeBoldText = cell.bold
                     val sb = SpannableStringBuilder(cell.text)
-                    val layout = StaticLayout.Builder.obtain(
-                        sb, 0, sb.length, paint, (cw - 2 * CELL_PADDING).roundToInt().coerceAtLeast(1)
-                    ).setLineSpacing(0f, 1.2f).build()
+                    val layout =
+                        StaticLayout.Builder.obtain(
+                                sb,
+                                0,
+                                sb.length,
+                                paint,
+                                (cw - 2 * CELL_PADDING).roundToInt().coerceAtLeast(1),
+                            )
+                            .setLineSpacing(0f, 1.2f)
+                            .build()
                     canvas.save()
                     canvas.translate(x + CELL_PADDING, y + (row.heightPx - layout.height) / 2f)
                     layout.draw(canvas)

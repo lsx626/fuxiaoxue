@@ -7,7 +7,11 @@ import java.io.File
 /** Only this application's download trees may be changed by storage actions. */
 class LocalStorage(context: Context) {
     val root = File(context.getExternalFilesDir(null) ?: context.filesDir, "elearning")
-    private val roots = listOfNotNull(context.getExternalFilesDir(null), context.filesDir).map { File(it, "elearning") }
+    private val roots =
+        listOfNotNull(context.getExternalFilesDir(null), context.filesDir).map {
+            File(it, "elearning")
+        }
+
     fun requireManaged(file: File): File {
         val target = file.canonicalFile
         require(roots.any { target.path.startsWith(it.canonicalPath + File.separator) }) {
@@ -15,6 +19,7 @@ class LocalStorage(context: Context) {
         }
         return target
     }
+
     fun deleteLocal(record: FileItem) {
         if (record.localPath.isBlank()) return
         val file = requireManaged(File(record.localPath))
@@ -29,12 +34,15 @@ class LocalStorage(context: Context) {
         var count = 0
         for (tree in roots.distinctBy { it.absolutePath }) {
             if (!tree.exists()) continue
-            tree.walkTopDown().onEnter { !java.nio.file.Files.isSymbolicLink(it.toPath()) }.forEach { file ->
-                if (file.isFile && !java.nio.file.Files.isSymbolicLink(file.toPath())) {
-                    bytes += file.length()
-                    if (DownloadPlan.isPartFile(file)) partBytes += file.length() else count++
+            tree
+                .walkTopDown()
+                .onEnter { !java.nio.file.Files.isSymbolicLink(it.toPath()) }
+                .forEach { file ->
+                    if (file.isFile && !java.nio.file.Files.isSymbolicLink(file.toPath())) {
+                        bytes += file.length()
+                        if (DownloadPlan.isPartFile(file)) partBytes += file.length() else count++
+                    }
                 }
-            }
         }
         return StorageUsage(bytes, partBytes, count)
     }

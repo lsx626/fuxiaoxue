@@ -15,14 +15,11 @@ data class CanvasCourse(
     val name: String,
     @SerializedName("course_code") val courseCode: String = "",
     @SerializedName("enrollment_term_id") val enrollmentTermId: Long = 0,
-    val term: CanvasTerm? = null
+    val term: CanvasTerm? = null,
 )
 
 /** Canvas 学期。 */
-data class CanvasTerm(
-    val id: Long,
-    val name: String = ""
-)
+data class CanvasTerm(val id: Long, val name: String = "")
 
 /** Canvas 文件。 */
 data class CanvasFile(
@@ -36,22 +33,21 @@ data class CanvasFile(
     @SerializedName("mime_class") val mimeClass: String = "",
     @SerializedName("locked_for_user") val lockedForUser: Boolean = false,
     /** 旧字段：部分 Canvas 版本/来源（模块附件）只给 `locked`。 */
-    val locked: Boolean = false
+    val locked: Boolean = false,
 ) {
     /** 两个键任一为真即视为锁定。 */
-    val isLocked: Boolean get() = lockedForUser || locked
+    val isLocked: Boolean
+        get() = lockedForUser || locked
 }
 
 /**
  * Canvas REST API 客户端。
  *
  * 硬性行为（与桌面端对齐）：
- * - **分页**：原样跟随 `Link: rel="next"`，不自行重建页码/参数；页数超过
- *   [RequestPolicy.maxPages] 时明确报错，而不是无限请求；
- * - **限流**：元数据请求串行并保持最小间隔；429 / 含 `Rate Limit Exceeded` 的
- *   403 尊重 `Retry-After`；`X-Rate-Limit-Remaining` 偏低时主动减速；
- * - **错误语义**：失败抛 [ApiException] 的对应子类，绝不返回空列表冒充成功
- *   （空列表会让界面显示「同步完成，0 个文件」，并可能被误判为远端删除）。
+ * - **分页**：原样跟随 `Link: rel="next"`，不自行重建页码/参数；页数超过 [RequestPolicy.maxPages] 时明确报错，而不是无限请求；
+ * - **限流**：元数据请求串行并保持最小间隔；429 / 含 `Rate Limit Exceeded` 的 403 尊重
+ *   `Retry-After`；`X-Rate-Limit-Remaining` 偏低时主动减速；
+ * - **错误语义**：失败抛 [ApiException] 的对应子类，绝不返回空列表冒充成功 （空列表会让界面显示「同步完成，0 个文件」，并可能被误判为远端删除）。
  *
  * 构造参数可注入传输/时钟/休眠，便于在 JVM 单测里完全离线验证上述行为。
  */
@@ -60,7 +56,7 @@ class CanvasApi(
     private val baseUrl: String = DEFAULT_BASE_URL,
     private val policy: RequestPolicy = RequestPolicy(),
     private val sleeper: suspend (Long) -> Unit = { delay(it) },
-    private val clock: () -> Long = { System.currentTimeMillis() }
+    private val clock: () -> Long = { System.currentTimeMillis() },
 ) : CanvasDataSource {
     private val gson = Gson()
 
@@ -72,8 +68,12 @@ class CanvasApi(
     /** 当前用户可见课程（含学期）。 */
     suspend fun getCourses(): List<CanvasCourse> =
         getPaged(COURSES_PATH).map { element ->
-            val course = try { gson.fromJson(element, CanvasCourse::class.java) }
-                catch (error: Exception) { throw ApiException.Parse("课程数据格式异常", error) }
+            val course =
+                try {
+                    gson.fromJson(element, CanvasCourse::class.java)
+                } catch (error: Exception) {
+                    throw ApiException.Parse("课程数据格式异常", error)
+                }
             if (course == null || course.id <= 0 || course.name.isNullOrBlank())
                 throw ApiException.Parse("课程数据不完整，已保留本地资料")
             course.copy(courseCode = course.courseCode.orEmpty())
@@ -84,12 +84,21 @@ class CanvasApi(
         getPaged(filesPath(courseId)).map { element ->
             // A silently dropped record would make the deletion gate trust an
             // incomplete list. Reject the whole listing instead.
-            val file = try { gson.fromJson(element, CanvasFile::class.java) }
-                catch (error: Exception) { throw ApiException.Parse("文件数据格式异常", error) }
+            val file =
+                try {
+                    gson.fromJson(element, CanvasFile::class.java)
+                } catch (error: Exception) {
+                    throw ApiException.Parse("文件数据格式异常", error)
+                }
             if (file == null || file.id <= 0 || file.size < 0)
                 throw ApiException.Parse("文件数据不完整，本轮不判定远端删除")
-            file.copy(displayName = file.displayName.orEmpty(), filename = file.filename.orEmpty(),
-                url = file.url.orEmpty(), updatedAt = file.updatedAt.orEmpty(), mimeClass = file.mimeClass.orEmpty())
+            file.copy(
+                displayName = file.displayName.orEmpty(),
+                filename = file.filename.orEmpty(),
+                url = file.url.orEmpty(),
+                updatedAt = file.updatedAt.orEmpty(),
+                mimeClass = file.mimeClass.orEmpty(),
+            )
         }
 
     // ------------------------------------------------------------------
@@ -123,16 +132,19 @@ class CanvasApi(
     /** 单个页面正文。 */
     override suspend fun getPageBody(courseId: Long, pageUrl: String): String {
         val body = request(url("/api/v1/courses/$courseId/pages/$pageUrl")).body
-        return runCatching {
-            gson.fromJson(body, CanvasPage::class.java).body.orEmpty()
-        }.getOrDefault("")
+        return runCatching { gson.fromJson(body, CanvasPage::class.java).body.orEmpty() }
+            .getOrDefault("")
     }
 
     /** 作业列表（含附件）。 */
     override suspend fun getAssignments(courseId: Long): List<CanvasAssignment> =
         getPaged("/api/v1/courses/$courseId/assignments?per_page=100").map {
-            val assignment = try { gson.fromJson(it, CanvasAssignment::class.java) }
-                catch (error: Exception) { throw ApiException.Parse("作业数据格式异常", error) }
+            val assignment =
+                try {
+                    gson.fromJson(it, CanvasAssignment::class.java)
+                } catch (error: Exception) {
+                    throw ApiException.Parse("作业数据格式异常", error)
+                }
             if (assignment == null || assignment.id <= 0 || assignment.name.isNullOrBlank())
                 throw ApiException.Parse("作业数据不完整，已保留之前的截止日期")
             assignment.copy(attachments = assignment.attachments.orEmpty())
@@ -141,20 +153,21 @@ class CanvasApi(
     /**
      * 公告列表（含附件）。
      *
-     * 部署差异：部分 Canvas 只提供 `discussion_topics?only_announcements=true`，
-     * 因此 `/announcements` 404 时自动回退到讨论主题接口，而不是把公告当空。
+     * 部署差异：部分 Canvas 只提供 `discussion_topics?only_announcements=true`， 因此 `/announcements` 404
+     * 时自动回退到讨论主题接口，而不是把公告当空。
      */
     override suspend fun getAnnouncements(courseId: Long): List<CanvasAnnouncement> {
         val path = "/api/v1/courses/$courseId/announcements?per_page=100&include[]=attachments"
-        val elements = try {
-            getPaged(path)
-        } catch (notFound: ApiException.Server) {
-            if (notFound.code != 404) throw notFound
-            getPaged(
-                "/api/v1/courses/$courseId/discussion_topics?only_announcements=true" +
-                    "&per_page=100&include[]=attachments"
-            )
-        }
+        val elements =
+            try {
+                getPaged(path)
+            } catch (notFound: ApiException.Server) {
+                if (notFound.code != 404) throw notFound
+                getPaged(
+                    "/api/v1/courses/$courseId/discussion_topics?only_announcements=true" +
+                        "&per_page=100&include[]=attachments"
+                )
+            }
         return elements.mapNotNull {
             runCatching { gson.fromJson(it, CanvasAnnouncement::class.java) }.getOrNull()
         }
@@ -164,28 +177,42 @@ class CanvasApi(
     override suspend fun getSyllabus(courseId: Long): String {
         val body = request(url("/api/v1/courses/$courseId?include[]=syllabus_body")).body
         return runCatching {
-            gson.fromJson(body, CanvasCourseDetail::class.java).syllabusBody.orEmpty()
-        }.getOrDefault("")
+                gson.fromJson(body, CanvasCourseDetail::class.java).syllabusBody.orEmpty()
+            }
+            .getOrDefault("")
     }
 
     /** 单个文件的完整元数据（引用型文件需要补签名下载地址）。 */
     override suspend fun getFile(courseId: Long, fileId: Long): CanvasFile? {
         val body = request(url("/api/v1/courses/$courseId/files/$fileId")).body
-        val file = try { gson.fromJson(body, CanvasFile::class.java) }
-            catch (error: Exception) { throw ApiException.Parse("文件数据格式异常", error) }
+        val file =
+            try {
+                gson.fromJson(body, CanvasFile::class.java)
+            } catch (error: Exception) {
+                throw ApiException.Parse("文件数据格式异常", error)
+            }
         if (file == null || file.id != fileId || file.size < 0)
             throw ApiException.Parse("文件数据不完整，请重新同步")
-        return file.copy(displayName = file.displayName.orEmpty(), filename = file.filename.orEmpty(),
-            url = file.url.orEmpty(), updatedAt = file.updatedAt.orEmpty(), mimeClass = file.mimeClass.orEmpty())
+        return file.copy(
+            displayName = file.displayName.orEmpty(),
+            filename = file.filename.orEmpty(),
+            url = file.url.orEmpty(),
+            updatedAt = file.updatedAt.orEmpty(),
+            mimeClass = file.mimeClass.orEmpty(),
+        )
     }
 
     /** 当前用户显示名；解析不出来返回 null（不算失败）。 */
     suspend fun getCurrentUser(): String? {
         val body = request(url(SELF_PATH)).body
         return runCatching {
-            JsonParser.parseString(body).asJsonObject.get("name")
-                ?.takeIf { !it.isJsonNull }?.asString
-        }.getOrNull()
+                JsonParser.parseString(body)
+                    .asJsonObject
+                    .get("name")
+                    ?.takeIf { !it.isJsonNull }
+                    ?.asString
+            }
+            .getOrNull()
     }
 
     // ------------------------------------------------------------------
@@ -199,13 +226,12 @@ class CanvasApi(
         while (next != null) {
             pages += 1
             if (pages > policy.maxPages) {
-                throw ApiException.Parse(
-                    "分页数量超过上限（${policy.maxPages}），已停止请求以免无休止拉取"
-                )
+                throw ApiException.Parse("分页数量超过上限（${policy.maxPages}），已停止请求以免无休止拉取")
             }
             val reply = request(next)
-            val array = runCatching { JsonParser.parseString(reply.body).asJsonArray }
-                .getOrElse { throw ApiException.Parse("响应不是合法的 JSON 数组", it) }
+            val array =
+                runCatching { JsonParser.parseString(reply.body).asJsonArray }
+                    .getOrElse { throw ApiException.Parse("响应不是合法的 JSON 数组", it) }
             items.addAll(array)
             // next 是不透明 URL，必须原样使用
             next = LinkHeader.next(reply.header("Link"))
@@ -216,79 +242,83 @@ class CanvasApi(
     /**
      * 执行一次带节流与重试的请求。
      *
-     * 重试期间一直持有 [gate]，即元数据请求严格串行；[sleeper] 可注入，
-     * 使单测能在毫秒内验证退避数值。
+     * 重试期间一直持有 [gate]，即元数据请求严格串行；[sleeper] 可注入， 使单测能在毫秒内验证退避数值。
      */
-    private suspend fun request(urlString: String): HttpResponse = gate.withLock {
-        var attempt = 0
-        while (true) {
-            attempt += 1
-            throttle()
-            val reply = try {
-                transport.get(urlString)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                if (attempt >= policy.maxAttempts) throw ApiException.Network(error)
-                sleeper(policy.backoffMs(attempt))
-                continue
-            }
-
-            applyRateLimitHints(reply)
-            val rateLimited = policy.isRateLimited(reply.code, reply.body)
-            if (reply.isSuccessful) return@withLock reply
-
-            // 鉴权失败必须显式报错，不能降级成「空数据」
-            if (reply.code == 401 || (reply.code == 403 && !rateLimited)) {
-                // Canvas also uses 401/403 for a course whose Files/Pages/etc.
-                // navigation is disabled.  Treating every such response as a
-                // dead session aborts the entire sync at the first restricted
-                // course.  Verify the session against the account endpoint:
-                // only a failed probe means the user must sign in again.
-                val selfUrl = url(SELF_PATH)
-                if (urlString != selfUrl) {
-                    val sessionProbe = try {
-                        transport.get(selfUrl)
+    private suspend fun request(urlString: String): HttpResponse =
+        gate.withLock {
+            var attempt = 0
+            while (true) {
+                attempt += 1
+                throttle()
+                val reply =
+                    try {
+                        transport.get(urlString)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
-                    } catch (_: Exception) {
-                        null
+                    } catch (error: Exception) {
+                        if (attempt >= policy.maxAttempts) throw ApiException.Network(error)
+                        sleeper(policy.backoffMs(attempt))
+                        continue
                     }
-                    if (sessionProbe?.isSuccessful == true) {
-                        throw ApiException.Server(
-                            reply.code, urlString,
-                            "当前课程未开放此内容或没有访问权限（HTTP ${reply.code}）"
+
+                applyRateLimitHints(reply)
+                val rateLimited = policy.isRateLimited(reply.code, reply.body)
+                if (reply.isSuccessful) return@withLock reply
+
+                // 鉴权失败必须显式报错，不能降级成「空数据」
+                if (reply.code == 401 || (reply.code == 403 && !rateLimited)) {
+                    // Canvas also uses 401/403 for a course whose Files/Pages/etc.
+                    // navigation is disabled.  Treating every such response as a
+                    // dead session aborts the entire sync at the first restricted
+                    // course.  Verify the session against the account endpoint:
+                    // only a failed probe means the user must sign in again.
+                    val selfUrl = url(SELF_PATH)
+                    if (urlString != selfUrl) {
+                        val sessionProbe =
+                            try {
+                                transport.get(selfUrl)
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                null
+                            }
+                        if (sessionProbe?.isSuccessful == true) {
+                            throw ApiException.Server(
+                                reply.code,
+                                urlString,
+                                "当前课程未开放此内容或没有访问权限（HTTP ${reply.code}）",
+                            )
+                        }
+                    }
+                    throw ApiException.Auth()
+                }
+                if (!policy.isRetryable(reply.code, rateLimited)) {
+                    throw ApiException.Server(reply.code, urlString, "请求失败（HTTP ${reply.code}）")
+                }
+                if (attempt >= policy.maxAttempts) {
+                    throw if (rateLimited) {
+                        ApiException.RateLimited(
+                            policy.retryAfterMs(reply.header("Retry-After")),
+                            "请求过于频繁，请稍后再试",
+                        )
+                    } else {
+                        ApiException.Server(
+                            reply.code,
+                            urlString,
+                            "服务端错误（HTTP ${reply.code}），已重试 $attempt 次",
                         )
                     }
                 }
-                throw ApiException.Auth()
+                val waitMs =
+                    if (rateLimited) {
+                        policy.retryAfterMs(reply.header("Retry-After"))
+                    } else {
+                        policy.backoffMs(attempt)
+                    }
+                sleeper(waitMs)
             }
-            if (!policy.isRetryable(reply.code, rateLimited)) {
-                throw ApiException.Server(reply.code, urlString, "请求失败（HTTP ${reply.code}）")
-            }
-            if (attempt >= policy.maxAttempts) {
-                throw if (rateLimited) {
-                    ApiException.RateLimited(
-                        policy.retryAfterMs(reply.header("Retry-After")),
-                        "请求过于频繁，请稍后再试"
-                    )
-                } else {
-                    ApiException.Server(
-                        reply.code, urlString,
-                        "服务端错误（HTTP ${reply.code}），已重试 $attempt 次"
-                    )
-                }
-            }
-            val waitMs = if (rateLimited) {
-                policy.retryAfterMs(reply.header("Retry-After"))
-            } else {
-                policy.backoffMs(attempt)
-            }
-            sleeper(waitMs)
+            @Suppress("UNREACHABLE_CODE") throw ApiException.Server(0, urlString, "请求未完成")
         }
-        @Suppress("UNREACHABLE_CODE")
-        throw ApiException.Server(0, urlString, "请求未完成")
-    }
 
     /** 最小间隔 + 额度偏低时的主动减速，保证元数据请求严格低频。 */
     private suspend fun throttle() {

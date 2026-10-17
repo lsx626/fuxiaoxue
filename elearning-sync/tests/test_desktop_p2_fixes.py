@@ -8,17 +8,16 @@
    ERROR_INVALID_PARAMETER(87) 拒绝启动）；
 4. save_yaml 原子写入，且不残留 .tmp。
 """
+
 from __future__ import annotations
 
 import os
-import shlex
 import sys
 import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-import yaml  # noqa: E402
 
 from fudan_sync.config import load_config  # noqa: E402
 from fudan_sync.gui import autostart  # noqa: E402
@@ -65,10 +64,13 @@ class UpdateConfigKeyPathTests(unittest.TestCase):
         self.assertNotIn("r", load_yaml(self.path))
 
     def test_nested_path_and_delete(self):
-        update_config(self.path, [
-            (("sync", "download", "concurrency"), 8),
-            (("auth", "token"), None),
-        ])
+        update_config(
+            self.path,
+            [
+                (("sync", "download", "concurrency"), 8),
+                (("auth", "token"), None),
+            ],
+        )
         data = load_yaml(self.path)
         self.assertEqual(8, data["sync"]["download"]["concurrency"])
         self.assertNotIn("token", data["auth"])
@@ -85,8 +87,8 @@ class SettingsRootDirSaveTests(unittest.TestCase):
         self.path = os.path.join(self.tmp, "config.yaml")
         _write_config(self.path)
         # SettingsDialog 在没有 QApplication 的进程里无法构造；有则用真实控件路径
-        from PySide6.QtWidgets import QApplication
         import fudan_sync.gui.settings_dialog as sd
+        from PySide6.QtWidgets import QApplication
 
         self.app = QApplication.instance() or QApplication([])
         self.sd = sd

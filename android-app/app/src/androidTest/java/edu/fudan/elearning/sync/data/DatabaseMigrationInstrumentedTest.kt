@@ -15,8 +15,7 @@ import org.junit.runner.RunWith
  * 数据库 schema 的插桩测试（真机/模拟器）。
  *
  * 覆盖两个真实踩过的坑：
- * 1. **全新安装**：`onCreate` 建出的表必须包含 v2 新增列，否则首次同步会
- *    直接抛 `no such column: updated_at`（插桩测试实测到过这个崩溃）；
+ * 1. **全新安装**：`onCreate` 建出的表必须包含 v2 新增列，否则首次同步会 直接抛 `no such column: updated_at`（插桩测试实测到过这个崩溃）；
  * 2. **v1 -> v2 升级**：迁移必须是加列式的非破坏性迁移，用户既有数据不能丢。
  */
 @RunWith(AndroidJUnit4::class)
@@ -31,16 +30,12 @@ class DatabaseMigrationInstrumentedTest {
         dbFile = context.getDatabasePath("fudan_sync.db")
         dbFile.parentFile?.mkdirs()
         // 每个用例都从干净的库开始，避免相互影响
-        listOf("", "-wal", "-shm").forEach { suffix ->
-            java.io.File(dbFile.path + suffix).delete()
-        }
+        listOf("", "-wal", "-shm").forEach { suffix -> java.io.File(dbFile.path + suffix).delete() }
     }
 
     @After
     fun tearDown() {
-        listOf("", "-wal", "-shm").forEach { suffix ->
-            java.io.File(dbFile.path + suffix).delete()
-        }
+        listOf("", "-wal", "-shm").forEach { suffix -> java.io.File(dbFile.path + suffix).delete() }
     }
 
     private fun columns(db: SQLiteDatabase, table: String): Set<String> {
@@ -57,28 +52,21 @@ class DatabaseMigrationInstrumentedTest {
         val helper = DatabaseHelper(context)
         val db = helper.writableDatabase
 
-        assertTrue(
-            "files 表必须有 updated_at（否则首次同步会崩）",
-            columns(db, "files").contains("updated_at")
-        )
+        assertTrue("files 表必须有 updated_at（否则首次同步会崩）", columns(db, "files").contains("updated_at"))
         val runColumns = columns(db, "sync_runs")
         assertTrue("files.error 必须在全新安装时建出", columns(db, "files").contains("error"))
         assertTrue(runColumns.contains("files_failed"))
         assertTrue(runColumns.contains("error"))
         assertEquals(DatabaseHelper.SCHEMA_VERSION, db.version)
         // v4：阅读进度表必须在全新安装时就存在（onCreate 与 onUpgrade 同步维护）
-        assertTrue(
-            "reading_progress 必须在全新安装时建出",
-            tables(db).contains("reading_progress")
-        )
+        assertTrue("reading_progress 必须在全新安装时建出", tables(db).contains("reading_progress"))
         helper.close()
     }
 
     private fun tables(db: SQLiteDatabase): Set<String> {
         val names = mutableSetOf<String>()
-        db.rawQuery(
-            "SELECT name FROM sqlite_master WHERE type IN ('table','view')", null
-        ).use { cursor ->
+        db.rawQuery("SELECT name FROM sqlite_master WHERE type IN ('table','view')", null).use {
+            cursor ->
             while (cursor.moveToNext()) names.add(cursor.getString(0))
         }
         return names
@@ -144,9 +132,15 @@ class DatabaseMigrationInstrumentedTest {
         val repo = Repo(context)
         repo.upsertFile(
             FileItem(
-                fileId = 11, courseId = 1, name = "新讲义.pdf", filename = "新讲义.pdf",
-                folderPath = "/tmp", localPath = "/tmp/新讲义.pdf", size = 456,
-                status = "downloaded", updatedAt = "2026-09-19T10:00:00Z"
+                fileId = 11,
+                courseId = 1,
+                name = "新讲义.pdf",
+                filename = "新讲义.pdf",
+                folderPath = "/tmp",
+                localPath = "/tmp/新讲义.pdf",
+                size = 456,
+                status = "downloaded",
+                updatedAt = "2026-09-19T10:00:00Z",
             )
         )
         val saved = repo.getFile(11)
@@ -173,7 +167,9 @@ class DatabaseMigrationInstrumentedTest {
                 url TEXT DEFAULT '', updated_at TEXT DEFAULT ''
             )"""
         )
-        legacy.execSQL("INSERT INTO courses (id, name, code, term) VALUES (1, '机器学习', 'CS229', '2025秋')")
+        legacy.execSQL(
+            "INSERT INTO courses (id, name, code, term) VALUES (1, '机器学习', 'CS229', '2025秋')"
+        )
         legacy.execSQL(
             """INSERT INTO files (file_id, course_id, name, filename, status, updated_at)
                VALUES (10, 1, '旧讲义.pdf', '旧讲义.pdf', 'downloaded', 't1')"""
@@ -207,20 +203,28 @@ class DatabaseMigrationInstrumentedTest {
     @Test
     fun upgradeFromV4_addsFileErrorAndKeepsFilesAndReadingProgress() {
         val legacy = SQLiteDatabase.openOrCreateDatabase(dbFile, null)
-        legacy.execSQL("""CREATE TABLE courses (
+        legacy.execSQL(
+            """CREATE TABLE courses (
             id INTEGER PRIMARY KEY, name TEXT NOT NULL, code TEXT DEFAULT '',
-            term TEXT DEFAULT '', last_synced_at TEXT)""")
-        legacy.execSQL("""CREATE TABLE files (
+            term TEXT DEFAULT '', last_synced_at TEXT)"""
+        )
+        legacy.execSQL(
+            """CREATE TABLE files (
             file_id INTEGER PRIMARY KEY, course_id INTEGER NOT NULL, name TEXT NOT NULL,
             filename TEXT DEFAULT '', folder_path TEXT DEFAULT '', local_path TEXT DEFAULT '',
             size INTEGER DEFAULT 0, status TEXT DEFAULT 'pending', downloaded_at TEXT,
-            url TEXT DEFAULT '', updated_at TEXT DEFAULT '')""")
-        legacy.execSQL("""CREATE TABLE reading_progress (
+            url TEXT DEFAULT '', updated_at TEXT DEFAULT '')"""
+        )
+        legacy.execSQL(
+            """CREATE TABLE reading_progress (
             file_id INTEGER PRIMARY KEY, course_id INTEGER DEFAULT 0, position INTEGER DEFAULT 0,
-            total INTEGER DEFAULT 0, is_media INTEGER DEFAULT 0, updated_at TEXT DEFAULT '')""")
+            total INTEGER DEFAULT 0, is_media INTEGER DEFAULT 0, updated_at TEXT DEFAULT '')"""
+        )
         legacy.execSQL("INSERT INTO courses(id, name) VALUES (1, '旧课程')")
-        legacy.execSQL("""INSERT INTO files(file_id, course_id, name, local_path, status, size)
-            VALUES (10, 1, '讲义.pdf', '/synthetic/讲义.pdf', 'downloaded', 123)""")
+        legacy.execSQL(
+            """INSERT INTO files(file_id, course_id, name, local_path, status, size)
+            VALUES (10, 1, '讲义.pdf', '/synthetic/讲义.pdf', 'downloaded', 123)"""
+        )
         legacy.execSQL("INSERT INTO reading_progress VALUES (10, 1, 7, 30, 0, 't1')")
         legacy.version = 4
         legacy.close()
@@ -258,7 +262,7 @@ class DatabaseMigrationInstrumentedTest {
                 filesDownloaded = 2,
                 bytesDownloaded = 2048,
                 filesFailed = 1,
-                error = "网络错误：timeout"
+                error = "网络错误：timeout",
             )
         )
 

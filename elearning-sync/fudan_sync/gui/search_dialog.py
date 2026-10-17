@@ -7,18 +7,26 @@
 CJK 预分词见 `fudan_sync/search_index.py`）；刚升级到带搜索的版本时，老库
 需要等回填完成后才有正文命中，期间文件名搜索已经可用。
 """
+
 from __future__ import annotations
 
 from typing import List, Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QHBoxLayout, QLabel,
-                               QLineEdit, QListWidget, QListWidgetItem,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..state import StateStore
 from ..utils import clean_course_name, format_size
-from .styles import (ACCENT, CARD, TEXT, TEXT_SECONDARY)
+from .styles import ACCENT, CARD, TEXT, TEXT_SECONDARY
 
 _DEBOUNCE_MS = 250
 _MAX_RESULTS = 200
@@ -55,8 +63,9 @@ class SearchDialog(QDialog):
         layout.setContentsMargins(20, 18, 20, 16)
         layout.setSpacing(10)
 
-        hint = QLabel("输入关键字搜索全部已下载课程的文件名与内容（中文可搜，"
-                      "如「神经网络」「傅里叶」）")
+        hint = QLabel(
+            "输入关键字搜索全部已下载课程的文件名与内容（中文可搜，如「神经网络」「傅里叶」）"
+        )
         hint.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
         layout.addWidget(hint)
 
@@ -66,7 +75,8 @@ class SearchDialog(QDialog):
         self.query_edit.setStyleSheet(
             f"QLineEdit {{ background: {CARD}; border: 1px solid #E2E7F1;"
             f" border-radius: 8px; padding: 6px 12px; color: {TEXT}; font-size: 14px; }}"
-            f"QLineEdit:focus {{ border: 1px solid {ACCENT}; }}")
+            f"QLineEdit:focus {{ border: 1px solid {ACCENT}; }}"
+        )
         self.query_edit.textChanged.connect(self._schedule_search)
         self.query_edit.returnPressed.connect(self._open_selected)
         layout.addWidget(self.query_edit)
@@ -81,7 +91,8 @@ class SearchDialog(QDialog):
             f"QListWidget {{ background: {CARD}; border: 1px solid #E2E7F1;"
             f" border-radius: 8px; }}"
             f"QListWidget::item {{ padding: 8px 10px; }}"
-            f"QListWidget::item:selected {{ background: #EEF0FF; }}")
+            f"QListWidget::item:selected {{ background: #EEF0FF; }}"
+        )
         self.result_list.itemDoubleClicked.connect(self._open_item)
         self.result_list.itemActivated.connect(self._open_item)
         layout.addWidget(self.result_list, 1)
@@ -133,8 +144,7 @@ class SearchDialog(QDialog):
         self.result_list.clear()
         for hit in self._results:
             title = hit.get("display_name") or hit.get("filename") or "未知文件"
-            course = clean_course_name(
-                hit.get("course_name") or f"课程 {hit.get('course_id')}")
+            course = clean_course_name(hit.get("course_name") or f"课程 {hit.get('course_id')}")
             size = format_size(hit.get("size") or 0)
             snippet = hit.get("snippet")
             first = f"{title}　·　{course}　·　{size}"

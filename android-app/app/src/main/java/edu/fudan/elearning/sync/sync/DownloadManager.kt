@@ -3,13 +3,13 @@ package edu.fudan.elearning.sync.sync
 import android.content.Context
 import edu.fudan.elearning.sync.network.ApiClient
 import edu.fudan.elearning.sync.network.readCancellable
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
 /** 单个文件的下载结果。 */
 sealed class DownloadOutcome {
@@ -17,13 +17,10 @@ sealed class DownloadOutcome {
         val path: File,
         val bytes: Long,
         /** 是否是断点续传完成的（用于界面/日志区分）。 */
-        val resumed: Boolean = false
+        val resumed: Boolean = false,
     ) : DownloadOutcome()
 
-    /**
-     * 失败。[retryable] 为 false 表示重试也不会成功（会话失效、权限不足、
-     * 服务端明确拒绝），调用方应立即停止重试并给出可操作提示。
-     */
+    /** 失败。[retryable] 为 false 表示重试也不会成功（会话失效、权限不足、 服务端明确拒绝），调用方应立即停止重试并给出可操作提示。 */
     data class Failed(val reason: String, val retryable: Boolean = true) : DownloadOutcome()
 }
 
@@ -37,10 +34,7 @@ sealed class DownloadOutcome {
  * 4. 成功后原子替换最终路径，替换失败时保留旧副本和断点；
  * 5. 失败按指数退避重试；会话失效/登录页 HTML 立刻停止重试。
  */
-class DownloadManager(
-    private val context: Context,
-    private val maxAttempts: Int = 3
-) {
+class DownloadManager(private val context: Context, private val maxAttempts: Int = 3) {
 
     private val rootDir: File
         get() = File(context.getExternalFilesDir(null) ?: context.filesDir, "elearning")
@@ -48,8 +42,7 @@ class DownloadManager(
     fun rootPath(): String = rootDir.absolutePath
 
     /** 计算某个课程目录下的文件绝对路径。 */
-    fun courseDir(courseName: String): File =
-        File(rootDir, sanitize(courseName)).apply { mkdirs() }
+    fun courseDir(courseName: String): File = File(rootDir, sanitize(courseName)).apply { mkdirs() }
 
     /** 课程目录里所有已落盘文件（含 `.part`），用于同名避让与清理。 */
     fun existingFileNames(courseDir: File): List<String> =
@@ -97,7 +90,7 @@ class DownloadManager(
         url: String,
         dest: File,
         part: File,
-        expectedSize: Long
+        expectedSize: Long,
     ): DownloadOutcome {
         val partLength = if (part.exists()) part.length() else 0L
         val rangeHeader = DownloadPlan.rangeHeader(partLength)
@@ -113,82 +106,89 @@ class DownloadManager(
     }
 
     private fun readResponse(
-        resp: okhttp3.Response, dest: File, part: File, expectedSize: Long,
-        partLength: Long, checkActive: () -> Unit
+        resp: okhttp3.Response,
+        dest: File,
+        part: File,
+        expectedSize: Long,
+        partLength: Long,
+        checkActive: () -> Unit,
     ): DownloadOutcome {
-            checkActive()
-            when {
-                // 断点已失效（远端文件变小/被替换）
-                resp.code == 416 -> {
-                    part.delete()
-                    return DownloadOutcome.Failed("断点已失效，将重新下载", retryable = true)
-                }
-                resp.code == 401 ->
-                    return DownloadOutcome.Failed("登录状态已失效，请重新登录", retryable = false)
-                resp.code == 403 ->
-                    // v1.2.2：403 最常见的原因是教师锁定了文件（答案类 .py / 压缩包 /
-                    // 答案文档常被锁定），而不是登录失效——把话说准，且不因此中止其余下载。
-                    return DownloadOutcome.Failed(
-                        "无权访问（HTTP 403）：该文件可能已被教师锁定", retryable = false
-                    )
-                resp.code != 200 && resp.code != 206 ->
-                    return DownloadOutcome.Failed(
-                        "下载失败（HTTP ${resp.code}）",
-                        retryable = resp.code >= 500 || resp.code == 408 || resp.code == 429
-                    )
-            }
-
-            if (resp.code == 206 && !DownloadPlan.rangeStartsAt(resp.header("Content-Range"), partLength)) {
+        checkActive()
+        when {
+            // 断点已失效（远端文件变小/被替换）
+            resp.code == 416 -> {
                 part.delete()
-                return DownloadOutcome.Failed("服务器返回的续传位置不一致，将重新下载")
+                return DownloadOutcome.Failed("断点已失效，将重新下载", retryable = true)
             }
+            resp.code == 401 -> return DownloadOutcome.Failed("登录状态已失效，请重新登录", retryable = false)
+            resp.code == 403 ->
+                // v1.2.2：403 最常见的原因是教师锁定了文件（答案类 .py / 压缩包 /
+                // 答案文档常被锁定），而不是登录失效——把话说准，且不因此中止其余下载。
+                return DownloadOutcome.Failed("无权访问（HTTP 403）：该文件可能已被教师锁定", retryable = false)
+            resp.code != 200 && resp.code != 206 ->
+                return DownloadOutcome.Failed(
+                    "下载失败（HTTP ${resp.code}）",
+                    retryable = resp.code >= 500 || resp.code == 408 || resp.code == 429,
+                )
+        }
 
-            val body = resp.body ?: return DownloadOutcome.Failed("响应内容为空")
-            val contentType = body.contentType()?.toString()
-            val append = DownloadPlan.appendToPart(resp.code, partLength > 0)
-            if (!append) part.delete()
-            val head = ByteArrayOutputStream()
+        if (
+            resp.code == 206 &&
+                !DownloadPlan.rangeStartsAt(resp.header("Content-Range"), partLength)
+        ) {
+            part.delete()
+            return DownloadOutcome.Failed("服务器返回的续传位置不一致，将重新下载")
+        }
 
-            try {
-                body.byteStream().use { input ->
-                    // 续传时必须以追加模式打开（File.outputStream() 会截断已有字节），
-                    // 否则 206 返回的尾部片段会覆盖掉已下载的头部，文件就此损坏。
-                    DownloadPlan.partOutputStream(part, append).use { out ->
-                        val buffer = ByteArray(64 * 1024)
-                        while (true) {
-                            checkActive()
-                            val read = input.read(buffer)
-                            if (read <= 0) break
-                            out.write(buffer, 0, read)
-                            // 只留开头一小段用于登录页嗅探
-                            if (head.size() < SNIFF_BYTES) {
-                                head.write(buffer, 0, minOf(read, SNIFF_BYTES - head.size()))
-                            }
+        val body = resp.body ?: return DownloadOutcome.Failed("响应内容为空")
+        val contentType = body.contentType()?.toString()
+        val append = DownloadPlan.appendToPart(resp.code, partLength > 0)
+        if (!append) part.delete()
+        val head = ByteArrayOutputStream()
+
+        try {
+            body.byteStream().use { input ->
+                // 续传时必须以追加模式打开（File.outputStream() 会截断已有字节），
+                // 否则 206 返回的尾部片段会覆盖掉已下载的头部，文件就此损坏。
+                DownloadPlan.partOutputStream(part, append).use { out ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        checkActive()
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        out.write(buffer, 0, read)
+                        // 只留开头一小段用于登录页嗅探
+                        if (head.size() < SNIFF_BYTES) {
+                            head.write(buffer, 0, minOf(read, SNIFF_BYTES - head.size()))
                         }
                     }
                 }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Exception) {
-                // 保留 .part 供下次 Range 续传
-                return DownloadOutcome.Failed("下载中断，已保留断点，请稍后重试")
             }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            // 保留 .part 供下次 Range 续传
+            return DownloadOutcome.Failed("下载中断，已保留断点，请稍后重试")
+        }
 
-            // 注意：ByteArrayOutputStream.toString(Charset) 是 JVM 10/Android API 33 的重载，
-            // minSdk 26 不可用；ByteArray.toByteArray().toString(Charset) 是 Kotlin stdlib，全 API 安全。
-            if (DownloadPlan.looksLikeLoginPage(contentType, head.toByteArray().toString(Charsets.UTF_8))) {
-                part.delete()
-                return DownloadOutcome.Failed("下载被重定向到登录页，会话已失效", retryable = false)
-            }
+        // 注意：ByteArrayOutputStream.toString(Charset) 是 JVM 10/Android API 33 的重载，
+        // minSdk 26 不可用；ByteArray.toByteArray().toString(Charset) 是 Kotlin stdlib，全 API 安全。
+        if (
+            DownloadPlan.looksLikeLoginPage(
+                contentType,
+                head.toByteArray().toString(Charsets.UTF_8),
+            )
+        ) {
+            part.delete()
+            return DownloadOutcome.Failed("下载被重定向到登录页，会话已失效", retryable = false)
+        }
 
-            val actual = part.length()
-            if (DownloadPlan.lengthMismatch(expectedSize, actual)) {
-                return DownloadOutcome.Failed(
-                    "下载不完整（$actual/$expectedSize 字节），已保留断点继续重试"
-                )
-            }
-            checkActive()
-            return finalize(part, dest, actual, resumed = append)
+        val actual = part.length()
+        if (DownloadPlan.lengthMismatch(expectedSize, actual)) {
+            return DownloadOutcome.Failed("下载不完整（$actual/$expectedSize 字节），已保留断点继续重试")
+        }
+        checkActive()
+        return finalize(part, dest, actual, resumed = append)
     }
 
     /** 同目录原子替换；不支持原子移动时请求普通替换移动，不预先删除旧副本。 */
@@ -209,41 +209,42 @@ class DownloadManager(
         /**
          * 净化文件名：先做**安全的百分号解码**，再移除非法字符。
          *
-         * Canvas 的 filename 字段对含非 ASCII 字符的名字常返回百分号编码
-         * （如 "%E6%9C%9F%E6%95%B0%E5%AD%A6.pdf"），直接落盘会让本地文件名
-         * 变成乱码。这里只解码「% 后跟两个十六进制」的合法序列，并按 UTF-8
-         * 重组；字面的百分号（如 "100%完成.pdf"）因 % 后不是十六进制而原样保留。
-         * 解码整体失败时退回原字符串，绝不让文件名变空。
+         * Canvas 的 filename 字段对含非 ASCII 字符的名字常返回百分号编码 （如
+         * "%E6%9C%9F%E6%95%B0%E5%AD%A6.pdf"），直接落盘会让本地文件名 变成乱码。这里只解码「% 后跟两个十六进制」的合法序列，并按 UTF-8
+         * 重组；字面的百分号（如 "100%完成.pdf"）因 % 后不是十六进制而原样保留。 解码整体失败时退回原字符串，绝不让文件名变空。
          */
         fun sanitize(name: String): String {
             val decoded = decodePercentSafely(name)
-            return decoded.replace(Regex("""[\\/:*?"<>|\u0000-\u001f]"""), "_").trim().ifEmpty { "未命名" }
+            return decoded.replace(Regex("""[\\/:*?"<>|\u0000-\u001f]"""), "_").trim().ifEmpty {
+                "未命名"
+            }
         }
 
         /** 严格解码 %XX 序列；非法序列保持原样，不抛异常。 */
         private fun decodePercentSafely(s: String): String {
             if ('%' !in s) return s
             return runCatching {
-                val out = StringBuilder(s.length)
-                val bytes = ByteArrayOutputStream()
-                var i = 0
-                while (i < s.length) {
-                    if (s[i] == '%' && i + 2 < s.length) {
-                        val hi = hexVal(s[i + 1])
-                        val lo = hexVal(s[i + 2])
-                        if (hi >= 0 && lo >= 0) {
-                            bytes.write(hi shl 4 or lo)
-                            i += 3
-                            continue
+                    val out = StringBuilder(s.length)
+                    val bytes = ByteArrayOutputStream()
+                    var i = 0
+                    while (i < s.length) {
+                        if (s[i] == '%' && i + 2 < s.length) {
+                            val hi = hexVal(s[i + 1])
+                            val lo = hexVal(s[i + 2])
+                            if (hi >= 0 && lo >= 0) {
+                                bytes.write(hi shl 4 or lo)
+                                i += 3
+                                continue
+                            }
                         }
+                        flushBytes(out, bytes)
+                        out.append(s[i])
+                        i += 1
                     }
                     flushBytes(out, bytes)
-                    out.append(s[i])
-                    i += 1
+                    out.toString()
                 }
-                flushBytes(out, bytes)
-                out.toString()
-            }.getOrElse { s }
+                .getOrElse { s }
         }
 
         private fun flushBytes(out: StringBuilder, bytes: ByteArrayOutputStream) {
@@ -253,11 +254,12 @@ class DownloadManager(
             }
         }
 
-        private fun hexVal(c: Char): Int = when (c) {
-            in '0'..'9' -> c - '0'
-            in 'a'..'f' -> c - 'a' + 10
-            in 'A'..'F' -> c - 'A' + 10
-            else -> -1
-        }
+        private fun hexVal(c: Char): Int =
+            when (c) {
+                in '0'..'9' -> c - '0'
+                in 'a'..'f' -> c - 'a' + 10
+                in 'A'..'F' -> c - 'A' + 10
+                else -> -1
+            }
     }
 }

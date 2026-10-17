@@ -1,4 +1,5 @@
 """系统托盘：最小化到托盘、快捷操作。"""
+
 from __future__ import annotations
 
 from PySide6.QtCore import QObject, Signal

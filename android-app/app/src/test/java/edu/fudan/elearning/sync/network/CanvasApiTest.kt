@@ -8,25 +8,26 @@ import org.junit.Test
 /**
  * CanvasApi 的分页/限流/错误语义单测。
  *
- * 全部用假传输 + 假时钟，不访问网络也不真正等待；这是「Android 分页与限流」
- * 这条 P0 缺口的可回归证据。
+ * 全部用假传输 + 假时钟，不访问网络也不真正等待；这是「Android 分页与限流」 这条 P0 缺口的可回归证据。
  */
 class CanvasApiTest {
 
-    @Test fun invalidRecordCannotTurnListingIntoDeletionEvidence() = runBlocking {
+    @Test
+    fun invalidRecordCannotTurnListingIntoDeletionEvidence() = runBlocking {
         for (json in listOf("[{\"id\":1}, null]", "[{\"id\":1},{\"id\":{}}]", "[{\"id\":0}]")) {
             val transport = FakeTransport(listOf({ reply(200, json) }))
-            try { api(transport, FakeTime()).getCourseFiles(1); throw AssertionError("expected parse error") }
-            catch (_: ApiException.Parse) { }
+            try {
+                api(transport, FakeTime()).getCourseFiles(1)
+                throw AssertionError("expected parse error")
+            } catch (_: ApiException.Parse) {}
         }
     }
 
     /** 一次性假传输：按调用顺序返回预设响应，用完后重复最后一个。 */
-    private class FakeTransport(
-        private val replies: List<() -> HttpResponse>
-    ) : HttpTransport {
+    private class FakeTransport(private val replies: List<() -> HttpResponse>) : HttpTransport {
         val urls = mutableListOf<String>()
         var calls = 0
+
         override suspend fun get(url: String): HttpResponse {
             urls += url
             val reply = replies[minOf(calls, replies.size - 1)]
@@ -48,25 +49,37 @@ class CanvasApiTest {
     private fun reply(code: Int, body: String, headers: Map<String, String> = emptyMap()) =
         HttpResponse(code, headers, body)
 
-    private fun api(transport: HttpTransport, time: FakeTime, policy: RequestPolicy = RequestPolicy()): CanvasApi =
+    private fun api(
+        transport: HttpTransport,
+        time: FakeTime,
+        policy: RequestPolicy = RequestPolicy(),
+    ): CanvasApi =
         CanvasApi(
             transport = transport,
             baseUrl = "https://host",
             policy = policy,
             sleeper = time.sleeper,
-            clock = time.clock
+            clock = time.clock,
         )
 
     @Test
     fun courses_followsNextLinkAndAccumulatesAllPages() = runBlocking {
         val nextUrl = "https://host/api/v1/courses?page=2&per_page=100&include[]=term"
-        val transport = FakeTransport(
-            listOf(
-                { reply(200, """[{"id":1,"name":"甲"},{"id":2,"name":"乙"}]""",
-                    mapOf("Link" to "<$nextUrl>; rel=\"next\", <https://host/x>; rel=\"last\"")) },
-                { reply(200, """[{"id":3,"name":"丙"}]""") }
+        val transport =
+            FakeTransport(
+                listOf(
+                    {
+                        reply(
+                            200,
+                            """[{"id":1,"name":"甲"},{"id":2,"name":"乙"}]""",
+                            mapOf(
+                                "Link" to "<$nextUrl>; rel=\"next\", <https://host/x>; rel=\"last\""
+                            ),
+                        )
+                    },
+                    { reply(200, """[{"id":3,"name":"丙"}]""") },
+                )
             )
-        )
         val time = FakeTime()
 
         val courses = api(transport, time).getCourses()
@@ -79,12 +92,16 @@ class CanvasApiTest {
 
     @Test
     fun courses_doesNotFollowNonNextRels() = runBlocking {
-        val transport = FakeTransport(
-            listOf(
-                { reply(200, """[{"id":1,"name":"甲"}]""",
-                    mapOf("Link" to "<https://host/api/v1/courses?page=9>; rel=\"last\"")) }
+        val transport =
+            FakeTransport(
+                listOf({
+                    reply(
+                        200,
+                        """[{"id":1,"name":"甲"}]""",
+                        mapOf("Link" to "<https://host/api/v1/courses?page=9>; rel=\"last\""),
+                    )
+                })
             )
-        )
         val courses = api(transport, FakeTime()).getCourses()
         assertEquals(1, courses.size)
         assertEquals(1, transport.calls)
@@ -92,13 +109,14 @@ class CanvasApiTest {
 
     @Test
     fun serverError_retriesWithExponentialBackoffThenSucceeds() = runBlocking {
-        val transport = FakeTransport(
-            listOf(
-                { reply(500, "boom") },
-                { reply(502, "boom") },
-                { reply(200, """[{"id":1,"name":"甲"}]""") }
+        val transport =
+            FakeTransport(
+                listOf(
+                    { reply(500, "boom") },
+                    { reply(502, "boom") },
+                    { reply(200, """[{"id":1,"name":"甲"}]""") },
+                )
             )
-        )
         val time = FakeTime()
 
         val courses = api(transport, time).getCourses()
@@ -111,12 +129,13 @@ class CanvasApiTest {
 
     @Test
     fun rateLimit_honoursRetryAfterSeconds() = runBlocking {
-        val transport = FakeTransport(
-            listOf(
-                { reply(429, "slow down", mapOf("Retry-After" to "2")) },
-                { reply(200, """[{"id":1,"name":"甲"}]""") }
+        val transport =
+            FakeTransport(
+                listOf(
+                    { reply(429, "slow down", mapOf("Retry-After" to "2")) },
+                    { reply(200, """[{"id":1,"name":"甲"}]""") },
+                )
             )
-        )
         val time = FakeTime()
 
         val courses = api(transport, time).getCourses()
@@ -127,9 +146,8 @@ class CanvasApiTest {
 
     @Test
     fun rateLimitExhausted_reportsRateLimitedInsteadOfEmptyList() = runBlocking {
-        val transport = FakeTransport(
-            listOf({ reply(429, "slow down", mapOf("Retry-After" to "1")) })
-        )
+        val transport =
+            FakeTransport(listOf({ reply(429, "slow down", mapOf("Retry-After" to "1")) }))
         val time = FakeTime()
         val policy = RequestPolicy(maxAttempts = 3)
 
@@ -175,10 +193,10 @@ class CanvasApiTest {
 
     @Test
     fun courseAccessDenied_withValidSession_isNotGlobalAuthFailure() = runBlocking {
-        val transport = FakeTransport(listOf(
-            { reply(401, "course files disabled") },
-            { reply(200, "{\"id\":1}") }
-        ))
+        val transport =
+            FakeTransport(
+                listOf({ reply(401, "course files disabled") }, { reply(200, "{\"id\":1}") })
+            )
         var thrown: ApiException? = null
         try {
             api(transport, FakeTime()).getCourseFiles(42L)
@@ -192,11 +210,16 @@ class CanvasApiTest {
 
     @Test
     fun tooManyPages_stopsWithParseError() = runBlocking {
-        val transport = FakeTransport(
-            listOf({
-                reply(200, "[]", mapOf("Link" to "<https://host/api/v1/courses?page=99>; rel=\"next\""))
-            })
-        )
+        val transport =
+            FakeTransport(
+                listOf({
+                    reply(
+                        200,
+                        "[]",
+                        mapOf("Link" to "<https://host/api/v1/courses?page=99>; rel=\"next\""),
+                    )
+                })
+            )
         val policy = RequestPolicy(maxPages = 3)
         var thrown: ApiException? = null
         try {
@@ -210,13 +233,19 @@ class CanvasApiTest {
 
     @Test
     fun lowRemainingHeader_slowsDownFollowingRequest() = runBlocking {
-        val transport = FakeTransport(
-            listOf(
-                { reply(200, """[{"id":1,"name":"甲"}]""",
-                    mapOf("X-Rate-Limit-Remaining" to "3")) },
-                { reply(200, """[{"id":2,"name":"乙"}]""") }
+        val transport =
+            FakeTransport(
+                listOf(
+                    {
+                        reply(
+                            200,
+                            """[{"id":1,"name":"甲"}]""",
+                            mapOf("X-Rate-Limit-Remaining" to "3"),
+                        )
+                    },
+                    { reply(200, """[{"id":2,"name":"乙"}]""") },
+                )
             )
-        )
         val time = FakeTime()
         val api = api(transport, time)
 
@@ -241,12 +270,10 @@ class CanvasApiTest {
 
     @Test
     fun currentUser_returnsNameAndToleratesWeirdBody() = runBlocking {
-        val transport = FakeTransport(
-            listOf(
-                { reply(200, """{"id":7,"name":"张三"}""") },
-                { reply(200, "not json") }
+        val transport =
+            FakeTransport(
+                listOf({ reply(200, """{"id":7,"name":"张三"}""") }, { reply(200, "not json") })
             )
-        )
         val api = api(transport, FakeTime())
         assertEquals("张三", api.getCurrentUser())
         assertEquals(null, api.getCurrentUser())
@@ -254,9 +281,11 @@ class CanvasApiTest {
 
     @Test
     fun networkFailure_reportsNetworkErrorNotEmptyList() = runBlocking {
-        val transport = object : HttpTransport {
-            override suspend fun get(url: String): HttpResponse = throw java.io.IOException("timeout")
-        }
+        val transport =
+            object : HttpTransport {
+                override suspend fun get(url: String): HttpResponse =
+                    throw java.io.IOException("timeout")
+            }
         val time = FakeTime()
         var thrown: ApiException? = null
         try {

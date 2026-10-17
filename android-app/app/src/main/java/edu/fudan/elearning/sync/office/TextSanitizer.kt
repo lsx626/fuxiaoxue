@@ -3,8 +3,7 @@ package edu.fudan.elearning.sync.office
 /**
  * 文档文本清洗（纯函数，可单测）。
  *
- * 真实的 Office 文本里常混有渲染层不可见的控制字符，直接交给 StaticLayout 会
- * 变成方块/乱码：
+ * 真实的 Office 文本里常混有渲染层不可见的控制字符，直接交给 StaticLayout 会 变成方块/乱码：
  * - `\u000B`（VT）在 PPT 里表示**软换行**，要转成 `\n`；
  * - `\u000C`（FF）、`\r` 统一成 `\n`；
  * - OOXML 会把非法控制字符转义成 `_x000B_` 这样的字面标记，必须还原；
@@ -27,7 +26,9 @@ object TextSanitizer {
                 val parsed = hex.toIntOrNull(16)
                 if (parsed != null && text[i + 6] == '_') {
                     when (parsed) {
-                        0x0B, 0x0A, 0x0C -> out.append('\n')
+                        0x0B,
+                        0x0A,
+                        0x0C -> out.append('\n')
                         0x0D -> Unit // 回车标记：换行由段落结构表达
                         0x09 -> out.append('\t')
                         else -> if (parsed > 0x1F && parsed != 0x7F) out.append(parsed.toChar())

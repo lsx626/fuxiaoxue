@@ -1,4 +1,5 @@
 """Qt multimedia runtime detection regression tests."""
+
 from __future__ import annotations
 
 import importlib.util

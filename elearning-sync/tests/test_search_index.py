@@ -10,6 +10,7 @@
 运行：python -m pytest elearning-sync/tests/test_search_index.py
      或 python elearning-sync/tests/test_search_index.py
 """
+
 from __future__ import annotations
 
 import os
@@ -38,9 +39,7 @@ class TokenizerTests(unittest.TestCase):
         self.assertEqual(tokenize_for_index("计算机"), "计 算 机 计算 算机")
 
     def test_latin_and_digits_stay_whole(self):
-        self.assertEqual(
-            tokenize_for_index("Lecture 12 chapters"),
-            "lecture 12 chapters")
+        self.assertEqual(tokenize_for_index("Lecture 12 chapters"), "lecture 12 chapters")
 
     def test_mixed_runs(self):
         tokens = tokenize_for_index("数据结构 lecture5.pdf").split()
@@ -93,7 +92,7 @@ class MatchQueryTests(unittest.TestCase):
 
     def test_terms_are_conjoined(self):
         match = build_match_query("算法 导论")
-        self.assertIn(' ', match)
+        self.assertIn(" ", match)
 
 
 class ExtractTextTests(unittest.TestCase):
@@ -130,8 +129,7 @@ class ExtractTextTests(unittest.TestCase):
         self.assertIsNone(extract_text(path))
 
     def test_html_strips_tags(self):
-        path = self._write("p.html",
-                           "<html><body><h1>实验报告</h1><p>内容甲</p></body></html>")
+        path = self._write("p.html", "<html><body><h1>实验报告</h1><p>内容甲</p></body></html>")
         text = extract_text(path)
         self.assertIsNotNone(text)
         self.assertIn("实验报告", text)
@@ -212,6 +210,7 @@ class ExtractTextTests(unittest.TestCase):
     def _import_docx():
         try:
             import docx  # noqa: PLC0415
+
             return docx
         except Exception:  # pylint: disable=broad-except
             return None
@@ -220,6 +219,7 @@ class ExtractTextTests(unittest.TestCase):
     def _import_openpyxl():
         try:
             import openpyxl  # noqa: PLC0415
+
             return openpyxl
         except Exception:  # pylint: disable=broad-except
             return None
@@ -228,6 +228,7 @@ class ExtractTextTests(unittest.TestCase):
     def _import_pptx():
         try:
             import pptx  # noqa: PLC0415
+
             return pptx
         except Exception:  # pylint: disable=broad-except
             return None
@@ -236,6 +237,7 @@ class ExtractTextTests(unittest.TestCase):
     def _import_fitz():
         try:
             import fitz  # noqa: PLC0415
+
             return fitz
         except Exception:  # pylint: disable=broad-except
             return None
@@ -250,20 +252,33 @@ class StoreIndexTests(unittest.TestCase):
         self.store.close()
         self.tmp.cleanup()
 
-    def _add_downloaded(self, file_id: int, name: str, content: str,
-                        status: str = "downloaded", course_id: int = 1):
+    def _add_downloaded(
+        self, file_id: int, name: str, content: str, status: str = "downloaded", course_id: int = 1
+    ):
         self.store.upsert_course(course_id, "计算机导论", "CS101", "2025秋", "student", False)
         path = os.path.join(self.tmp.name, name)
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(content)
-        self.store.upsert_file({
-            "file_id": file_id, "course_id": course_id, "filename": name,
-            "display_name": name, "size": len(content.encode("utf-8")),
-            "content_type": "", "folder_id": None, "folder_path": "",
-            "created_at": "t1", "updated_at": "t1", "modified_at": "t1",
-            "locked_for_user": False, "hidden": False, "source": "files",
-            "context": "", "local_path": path,
-        })
+        self.store.upsert_file(
+            {
+                "file_id": file_id,
+                "course_id": course_id,
+                "filename": name,
+                "display_name": name,
+                "size": len(content.encode("utf-8")),
+                "content_type": "",
+                "folder_id": None,
+                "folder_path": "",
+                "created_at": "t1",
+                "updated_at": "t1",
+                "modified_at": "t1",
+                "locked_for_user": False,
+                "hidden": False,
+                "source": "files",
+                "context": "",
+                "local_path": path,
+            }
+        )
         self.store.mark_downloaded(file_id, path, len(content.encode("utf-8")))
         return path
 
@@ -305,7 +320,7 @@ class StoreIndexTests(unittest.TestCase):
     def test_remote_missing_excluded(self):
         self._add_downloaded(15, "d.txt", "离散数学图论")
         self.store.upsert_file_index(15, "d.txt", "离散数学图论")
-        self.store.mark_missing_files(1, seen_file_ids=[16, 17])
+        self.store.purge_missing_files(1, seen_file_ids=[16, 17], course_root=self.tmp.name)
         self.assertEqual(len(self.store.search_files("离散数学")), 0)
 
     def test_unindexed_list_and_backfill(self):
@@ -343,8 +358,10 @@ class SyncEngineIndexTests(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.cfg = AppConfig(root_dir=os.path.join(self.tmp.name, "files"),
-                             state_db=os.path.join(self.tmp.name, "st.db"))
+        self.cfg = AppConfig(
+            root_dir=os.path.join(self.tmp.name, "files"),
+            state_db=os.path.join(self.tmp.name, "st.db"),
+        )
         os.makedirs(self.cfg.root_dir, exist_ok=True)
         self.state = StateStore(self.cfg.state_db)
         self.state.upsert_course(1, "机器学习", "CS229", "2025秋", "student", False)
@@ -360,9 +377,15 @@ class SyncEngineIndexTests(unittest.TestCase):
         with open(local, "w", encoding="utf-8") as handle:
             handle.write(content)
         task = DownloadTask(
-            file_id=file_id, course_id=1, filename=filename, folder_path="",
-            course_dir=self.cfg.root_dir, size=len(content.encode("utf-8")),
-            api_path=f"/courses/1/files/{file_id}", fallback_url="")
+            file_id=file_id,
+            course_id=1,
+            filename=filename,
+            folder_path="",
+            course_directory=self.cfg.root_dir,
+            size=len(content.encode("utf-8")),
+            api_path=f"/courses/1/files/{file_id}",
+            fallback_url="",
+        )
         result = DownloadResult(task)
         result.success = True
         result.local_path = local
@@ -370,14 +393,26 @@ class SyncEngineIndexTests(unittest.TestCase):
         return task, result
 
     def _record(self, file_id: int, filename: str, content: str):
-        self.state.upsert_file({
-            "file_id": file_id, "course_id": 1, "filename": filename,
-            "display_name": filename, "size": len(content.encode("utf-8")),
-            "content_type": "", "folder_id": None, "folder_path": "",
-            "created_at": "t1", "updated_at": "t1", "modified_at": "t1",
-            "locked_for_user": False, "hidden": False, "source": "files",
-            "context": "", "local_path": os.path.join(self.cfg.root_dir, filename),
-        })
+        self.state.upsert_file(
+            {
+                "file_id": file_id,
+                "course_id": 1,
+                "filename": filename,
+                "display_name": filename,
+                "size": len(content.encode("utf-8")),
+                "content_type": "",
+                "folder_id": None,
+                "folder_path": "",
+                "created_at": "t1",
+                "updated_at": "t1",
+                "modified_at": "t1",
+                "locked_for_user": False,
+                "hidden": False,
+                "source": "files",
+                "context": "",
+                "local_path": os.path.join(self.cfg.root_dir, filename),
+            }
+        )
 
     def test_download_completions_get_indexed(self):
         _, result = self._make_task(20, "note.txt", "本节讲授支持向量机与核技巧")
@@ -410,8 +445,7 @@ class SyncEngineIndexTests(unittest.TestCase):
         self.engine.downloader.stop()
         self.engine._backfill_search_index()
         # 收到停止信号后不应建索引，但也不应抛异常
-        self.assertEqual(
-            [r["file_id"] for r in self.state.unindexed_downloaded_files(10)], [22])
+        self.assertEqual([r["file_id"] for r in self.state.unindexed_downloaded_files(10)], [22])
 
     def test_extraction_failure_only_indexes_filename(self):
         # 损坏文件 / 不支持的格式：不建内容索引，但文件名仍可被搜到
@@ -428,12 +462,27 @@ class SyncEngineIndexTests(unittest.TestCase):
 
 class FilterRecordsTests(unittest.TestCase):
     FILES = [
-        {"filename": "lec1.pdf", "display_name": "lec1.pdf", "source": "files",
-         "context": "", "folder_path": "课件"},
-        {"filename": "作业2.docx", "display_name": "作业2.docx", "source": "assignment",
-         "context": "作业: 第二周", "folder_path": ""},
-        {"filename": "notes.txt", "display_name": "笔记", "source": "page",
-         "context": "页面: 复习", "folder_path": ""},
+        {
+            "filename": "lec1.pdf",
+            "display_name": "lec1.pdf",
+            "source": "files",
+            "context": "",
+            "folder_path": "课件",
+        },
+        {
+            "filename": "作业2.docx",
+            "display_name": "作业2.docx",
+            "source": "assignment",
+            "context": "作业: 第二周",
+            "folder_path": "",
+        },
+        {
+            "filename": "notes.txt",
+            "display_name": "笔记",
+            "source": "page",
+            "context": "页面: 复习",
+            "folder_path": "",
+        },
     ]
 
     def test_match_filename(self):

@@ -57,7 +57,7 @@ android-app/
 │       │   ├── util/                     # Prefs、SecurePrefs、FileUtils
 │       │   └── worker/                   # SyncWorker、通知
 │       └── res/
-│           ├── drawable/ic_launcher.xml         # 学士帽图标矢量
+│           ├── drawable/ic_launcher.xml         # 双页书品牌图标矢量
 │           ├── drawable-anydpi-v26/ic_launcher.xml  # 自适应图标
 │           ├── values/strings.xml               # app_name = 复小学
 │           └── values/themes.xml                # Theme.FuXiaoXue
@@ -68,11 +68,11 @@ android-app/
 
 - **应用名称**：复小学
 - **包名**：`edu.fudan.elearning.sync`
-- **版本**：1.3.0（versionCode 20）
+- **版本**：1.3.1（versionCode 21）
 - **本版改进**：全面重做 UI 并拆分功能页；离线资料库、可取消下载、同步/删除互斥、搜索与预览返回状态、失败恢复与后台策略，详见 [重构验收记录](REFACTOR_AUDIT.md)。
 - **数据库修复**：schema v5 补齐 `files.error`（v1.2.2/v1.2.3 写入该字段但未创建列）；当前 **v6** 新增原文摘要缓存并清理重复索引。保留课程、下载路径、截止日期和阅读进度。
 - **验证**：136 项 JVM、66 项设备测试通过且无跳过；lint/debug 应用与测试 APK 构建通过。窄屏 320dp、字体 1.3 倍与平板 1280dp 已截图检查。真实学校账号从空库同步 61 个文件（约 1.21 GB）且逐个完成完整性与预览核心验证，第二轮增量为 0 下载/0 失败；旧系统真机和长期后台仍需发布验收。
-- **同步**：Link 分页 + 限流退避；`.part` 断点续传 + 长度校验 + 原子落盘 + 同名避让；抓取范围与桌面端对齐（目录树、模块、页面、作业、公告、大纲中的文件引用），只有课程文件主列表完整成功时才判定远端删除
+- **同步**：Link 分页 + 限流退避；`.part` 断点续传 + 长度校验 + 原子落盘 + 同名避让；抓取范围与桌面端对齐。只有课程文件主列表完整成功时才判定远端删除，随后清理本地副本、断点和关联记录
 - **最低 Android 版本**：8.0（API 26）
 - **目标 Android 版本**：15（API 35）
 
@@ -103,10 +103,10 @@ cd android-app
 | 主色 | `#4F46E5` Indigo 600 | `0xFF4F46E5` |
 | 悬停 / 深色 | `#4338CA` / `#312E81` | `0xFF4338CA` / `0xFF312E81` |
 | 背景 | `#F6F7FC` | 浅色 `#F7F8FC` / 深色 `#10131C` |
-| 图标 | 圆角靛蓝方形 + 白色学士帽 | 同一矢量几何 |
+| 图标 | 深蓝圆角底 + 向中央折叠的双页书 | 同一矢量几何 |
 | 状态栏 | — | 随应用明暗主题调整图标对比度 |
 
-图标为同一学士帽几何（帽板 / 帽箍 / 帽穗），桌面端 `build_assets/app.ico`
+图标为同一双页书几何，桌面端 `build_assets/app.ico`
 与 Android `ic_launcher.xml` 共用设计。
 
 ## Android 权限

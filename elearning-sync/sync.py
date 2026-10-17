@@ -11,20 +11,29 @@
   python sync.py daemon                     # 守护进程：定时增量同步（实时更新）
   python sync.py status                     # 查看本地同步状态
 """
+
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from fudan_sync.auth import (AuthError, CookieAuth, TokenAuth,  # noqa: E402
-                             build_auth, browser_login)
+from fudan_sync.auth import (
+    AuthError,
+    CookieAuth,
+    TokenAuth,  # noqa: E402
+    browser_login,
+    build_auth,
+)
 from fudan_sync.canvas_api import CanvasAPI  # noqa: E402
-from fudan_sync.config import (AppConfig, ensure_runtime_dirs, load_config,  # noqa: E402
-                               validate_config)
+from fudan_sync.config import (
+    AppConfig,
+    ensure_runtime_dirs,
+    load_config,  # noqa: E402
+    validate_config,
+)
 from fudan_sync.daemon import SyncDaemon  # noqa: E402
 from fudan_sync.password_login import PasswordLoginError, login_and_save  # noqa: E402
 from fudan_sync.state import StateStore  # noqa: E402
@@ -42,9 +51,9 @@ def cmd_login(args, cfg: AppConfig, logger) -> int:
     if method == "browser":
         logger.info("启动浏览器登录（UIS 统一身份认证）...")
         try:
-            auth = browser_login(cfg.base_url, cfg.cookie_file,
-                                 headless=args.headless,
-                                 timeout_seconds=args.timeout)
+            auth = browser_login(
+                cfg.base_url, cfg.cookie_file, headless=args.headless, timeout_seconds=args.timeout
+            )
         except AuthError as exc:
             logger.error("浏览器登录失败: %s", exc)
             return 1
@@ -61,8 +70,10 @@ def cmd_login(args, cfg: AppConfig, logger) -> int:
         auth = TokenAuth(token)
     elif method == "cookie":
         if not os.path.exists(cfg.cookie_file):
-            logger.error("Cookie 文件不存在: %s，请先使用 browser 方式登录，或手动导出 Cookie",
-                         cfg.cookie_file)
+            logger.error(
+                "Cookie 文件不存在: %s，请先使用 browser 方式登录，或手动导出 Cookie",
+                cfg.cookie_file,
+            )
             return 1
         # 持久化认证方式：否则下次直接运行 sync/daemon 仍会按旧方式认证而失败
         cfg.auth_method = "cookie"
@@ -76,6 +87,7 @@ def cmd_login(args, cfg: AppConfig, logger) -> int:
         password = args.password or os.environ.get("FUDAN_UIS_PASSWORD")
         if not password:
             import getpass
+
             try:
                 password = getpass.getpass(f"请输入 UIS 账号 {username} 的密码: ")
             except (EOFError, KeyboardInterrupt):
@@ -85,8 +97,13 @@ def cmd_login(args, cfg: AppConfig, logger) -> int:
                 logger.error("密码不能为空")
                 return 1
         try:
-            login_and_save(cfg.base_url, username, password, cfg.cookie_file,
-                           store_credentials=not args.no_save)
+            login_and_save(
+                cfg.base_url,
+                username,
+                password,
+                cfg.cookie_file,
+                store_credentials=not args.no_save,
+            )
         except PasswordLoginError as exc:
             logger.error("登录失败: %s", exc)
             return 1
@@ -104,8 +121,9 @@ def cmd_login(args, cfg: AppConfig, logger) -> int:
     if not user.get("id"):
         logger.error("认证无效或已过期，请重新登录")
         return 1
-    logger.info("登录成功！用户: %s（id=%s）", user.get("name") or user.get("short_name"),
-                user.get("id"))
+    logger.info(
+        "登录成功！用户: %s（id=%s）", user.get("name") or user.get("short_name"), user.get("id")
+    )
     return 0
 
 
@@ -113,6 +131,7 @@ def _persist_auth_method(cfg: AppConfig, method: str, logger) -> None:
     """把选定的认证方式写回配置文件，方便后续直接运行 sync/daemon。"""
     try:
         import yaml
+
         path = cfg.config_path
         data = {}
         if os.path.exists(path):
@@ -134,8 +153,9 @@ def _persist_auth_method(cfg: AppConfig, method: str, logger) -> None:
 def cmd_courses(args, cfg: AppConfig, logger) -> int:
     auth = build_auth(cfg)
     api = CanvasAPI(cfg.base_url, auth, logger=logger)
-    courses = api.list_courses(enrollment_type=cfg.sync.enrollment_type,
-                              only_favorites=cfg.sync.only_favorites)
+    courses = api.list_courses(
+        enrollment_type=cfg.sync.enrollment_type, only_favorites=cfg.sync.only_favorites
+    )
     if not courses:
         logger.warning("未找到课程，请检查认证状态或 enrollment_type 设置")
         return 1
@@ -145,9 +165,13 @@ def cmd_courses(args, cfg: AppConfig, logger) -> int:
         if isinstance(course.get("term"), dict):
             term = course["term"].get("name") or ""
         code = course.get("course_code") or course.get("sis_course_id") or ""
-        logger.info("  [%d] %s %s%s", course["id"], course.get("name", ""),
-                    f"({code})" if code else "",
-                    f" | {term}" if term else "")
+        logger.info(
+            "  [%d] %s %s%s",
+            course["id"],
+            course.get("name", ""),
+            f"({code})" if code else "",
+            f" | {term}" if term else "",
+        )
     return 0
 
 
@@ -168,9 +192,14 @@ def cmd_daemon(args, cfg: AppConfig, logger) -> int:
     auth = build_auth(cfg)
     api = CanvasAPI(cfg.base_url, auth, logger=logger)
     engine = SyncEngine(cfg, api, state, logger=logger)
-    daemon = SyncDaemon(cfg, engine, state,
-                        interval_minutes=args.interval or cfg.sync.interval_minutes,
-                        logger=logger, single=args.single)
+    daemon = SyncDaemon(
+        cfg,
+        engine,
+        state,
+        interval_minutes=args.interval or cfg.sync.interval_minutes,
+        logger=logger,
+        single=args.single,
+    )
     try:
         return daemon.run()
     finally:
@@ -188,20 +217,30 @@ def cmd_status(args, cfg: AppConfig, logger) -> int:
         logger.info("===== 同步状态 =====")
         logger.info("本地根目录: %s", cfg.root_dir)
         logger.info("课程数: %d", stats["courses"])
-        logger.info("文件总数: %d（已下载 %d，待下载 %d，失败 %d，远端已移除 %d）",
-                    stats["files_total"], stats["files_downloaded"], stats["files_pending"],
-                    stats["files_failed"], stats["files_missing"])
+        logger.info(
+            "文件总数: %d（已下载 %d，待下载 %d，失败 %d，远端已移除 %d）",
+            stats["files_total"],
+            stats["files_downloaded"],
+            stats["files_pending"],
+            stats["files_failed"],
+            stats["files_missing"],
+        )
         logger.info("已下载总量: %s", format_size(stats["bytes"]))
         if last:
-            logger.info("最近一次同步: %s（%s，成功 %d / 失败 %d）",
-                        last.get("finished_at"), last.get("mode"),
-                        last.get("files_downloaded"), last.get("files_failed"))
+            logger.info(
+                "最近一次同步: %s（%s，成功 %d / 失败 %d）",
+                last.get("finished_at"),
+                last.get("mode"),
+                last.get("files_downloaded"),
+                last.get("files_failed"),
+            )
         if args.courses:
             for course in state.list_courses():
                 files = state.list_files_by_course(course["id"])
                 downloaded = sum(1 for f in files if f["status"] == "downloaded")
-                logger.info("  [%d] %s: %d/%d 已下载", course["id"], course["name"],
-                            downloaded, len(files))
+                logger.info(
+                    "  [%d] %s: %d/%d 已下载", course["id"], course["name"], downloaded, len(files)
+                )
     finally:
         state.close()
     return 0
@@ -218,8 +257,12 @@ def cmd_list_files(args, cfg: AppConfig, logger) -> int:
                 continue
             logger.info("===== [%d] %s =====", course["id"], course["name"])
             for f in state.list_files_by_course(course["id"]):
-                logger.info("  %-8s %s  %s", f["status"], format_size(f["size"] or 0),
-                            os.path.join(f["folder_path"] or "", f["filename"]))
+                logger.info(
+                    "  %-8s %s  %s",
+                    f["status"],
+                    format_size(f["size"] or 0),
+                    os.path.join(f["folder_path"] or "", f["filename"]),
+                )
     finally:
         state.close()
     return 0
@@ -232,18 +275,25 @@ def main(argv=None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("-c", "--config", default=DEFAULT_CONFIG,
-                        help=f"配置文件路径（默认 {DEFAULT_CONFIG}）")
+    parser.add_argument(
+        "-c", "--config", default=DEFAULT_CONFIG, help=f"配置文件路径（默认 {DEFAULT_CONFIG}）"
+    )
     sub = parser.add_subparsers(dest="command")
 
     login = sub.add_parser("login", help="登录并保存凭据")
-    login.add_argument("--method", choices=["token", "cookie", "browser", "password"],
-                       default="browser", help="登录方式")
+    login.add_argument(
+        "--method",
+        choices=["token", "cookie", "browser", "password"],
+        default="browser",
+        help="登录方式",
+    )
     login.add_argument("--token", help="Canvas API Token（method=token 时使用）")
     login.add_argument("--username", help="UIS 账号（学号/邮箱，method=password 时使用）")
     login.add_argument("--password", help="UIS 密码（method=password 时使用；省略则交互输入）")
     login.add_argument("--no-save", action="store_true", help="不把密码存入系统钥匙串")
-    login.add_argument("--headless", action="store_true", help="无头浏览器（不推荐，UIS 可能需验证码）")
+    login.add_argument(
+        "--headless", action="store_true", help="无头浏览器（不推荐，UIS 可能需验证码）"
+    )
     login.add_argument("--timeout", type=int, default=900, help="登录等待超时（秒）")
     login.set_defaults(func=cmd_login)
 
@@ -277,6 +327,7 @@ def main(argv=None) -> int:
         example = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.example.yaml")
         if os.path.exists(example):
             import shutil
+
             shutil.copyfile(example, args.config)
             cfg = load_config(args.config)
             print(f"[config] 已从示例生成配置文件: {args.config}，请按需修改后重新运行。")

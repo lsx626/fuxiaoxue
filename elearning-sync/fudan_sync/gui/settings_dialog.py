@@ -1,21 +1,33 @@
 """设置对话框：同步目录、间隔、过滤策略、开机自启、退出登录。"""
+
 from __future__ import annotations
 
 import os
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import (QCheckBox, QFileDialog, QFormLayout,
-                               QFrame, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-                               QMessageBox, QPushButton, QScrollArea, QSizePolicy,
-                               QSpinBox, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QFileDialog,
+    QFormLayout,
+    QFrame,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..config import load_config
 from ..password_login import clear_credentials
 from . import autostart
 from .config_io import update_config
 from .icon import app_icon
-from .styles import DANGER
 
 
 class SettingsDialog(QFrame):
@@ -38,8 +50,7 @@ class SettingsDialog(QFrame):
 
     def _center(self) -> None:
         screen = QGuiApplication.primaryScreen().availableGeometry()
-        self.move(screen.center().x() - self.width() // 2,
-                  screen.center().y() - self.height() // 2)
+        self.move(screen.center().x() - self.width() // 2, screen.center().y() - self.height() // 2)
 
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
@@ -99,9 +110,10 @@ class SettingsDialog(QFrame):
         self.archive_check.setChecked(bool(self.cfg.sync.archive_pages))
         sync_form.addRow("", self.archive_check)
 
-        self.prune_check = QCheckBox("远端已删除的文件，本地也同步删除")
-        self.prune_check.setChecked(bool(self.cfg.sync.prune))
-        sync_form.addRow("", self.prune_check)
+        cleanup_note = QLabel("远端删除的课程文件会在列表完整同步后自动清理本地副本与记录。")
+        cleanup_note.setWordWrap(True)
+        cleanup_note.setObjectName("hint")
+        sync_form.addRow("远端清理", cleanup_note)
 
         self.empty_check = QCheckBox("跳过空课程与组织站点（不在本地建空目录）")
         self.empty_check.setChecked(bool(self.cfg.sync.skip_empty_courses))
@@ -139,11 +151,16 @@ class SettingsDialog(QFrame):
         # ---- 账号 ----
         account_box = QGroupBox("账号")
         account_form = QFormLayout(account_box)
-        method_names = {"password": "账号密码（自动登录）", "cookie": "会话 Cookie",
-                        "browser": "浏览器登录", "token": "API Token"}
+        method_names = {
+            "password": "账号密码（自动登录）",
+            "cookie": "会话 Cookie",
+            "browser": "浏览器登录",
+            "token": "API Token",
+        }
         method_text = method_names.get(self.cfg.auth_method, self.cfg.auth_method or "未设置")
-        account_label = QLabel(f"{self.cfg.uis_username or '（未登录）'}"
-                               f"（登录方式：{method_text}）")
+        account_label = QLabel(
+            f"{self.cfg.uis_username or '（未登录）'}（登录方式：{method_text}）"
+        )
         account_label.setWordWrap(True)
         account_form.addRow("当前账号", account_label)
         logout_button = QPushButton("退出登录并清除保存的密码")
@@ -172,25 +189,31 @@ class SettingsDialog(QFrame):
     # ------------------------------------------------------------------
     def _browse_root(self) -> None:
         directory = QFileDialog.getExistingDirectory(
-            self, "选择同步根目录",
-            self.root_edit.text() or os.path.expanduser("~"))
+            self, "选择同步根目录", self.root_edit.text() or os.path.expanduser("~")
+        )
         if directory:
             self.root_edit.setText(directory)
 
     def _on_logout(self) -> None:
         confirm = QMessageBox.question(
-            self, "退出登录",
+            self,
+            "退出登录",
             "将清除本机保存的账号密码，下次打开软件需要重新登录。确认退出登录吗？",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
         if confirm != QMessageBox.Yes:
             return
         clear_credentials(self.cfg.uis_username or None)
         # 清掉配置里的登录方式，下次启动进入登录引导
-        update_config(self.config_path, [
-            (("auth", "method"), None),
-            (("auth", "uis_username"), None),
-            (("auth", "token"), None),
-        ])
+        update_config(
+            self.config_path,
+            [
+                (("auth", "method"), None),
+                (("auth", "uis_username"), None),
+                (("auth", "token"), None),
+            ],
+        )
         self.logout_requested.emit()
         self.close()
 
@@ -206,26 +229,32 @@ class SettingsDialog(QFrame):
             return
 
         folders = [f.strip().lower() for f in self.folders_edit.text().split(",") if f.strip()]
-        exts = [e.strip().lower().lstrip(".") for e in self.exts_edit.text().split(",") if e.strip()]
+        exts = [
+            e.strip().lower().lstrip(".") for e in self.exts_edit.text().split(",") if e.strip()
+        ]
 
         try:
             # 注意：键路径必须是单元素元组 ("root_dir",)。若误传字符串 "root_dir"，
             # update_config 会逐字符迭代它，把根目录写进
             # r:{o:{o:{t:{_:{d:{i:{r: …}}}}}}} 这样的垃圾嵌套键，
             # 用户改的同步目录则永远不生效。
-            update_config(self.config_path, [
-                (("root_dir",), os.path.expanduser(root)),
-                (("sync", "interval_minutes"), int(self.interval_spin.value())),
-                (("sync", "only_favorites"), bool(self.only_favorites_check.isChecked())),
-                (("sync", "archive_pages"), bool(self.archive_check.isChecked())),
-                (("sync", "prune"), bool(self.prune_check.isChecked())),
-                (("sync", "skip_empty_courses"), bool(self.empty_check.isChecked())),
-                (("sync", "download", "concurrency"), int(self.concurrency_spin.value())),
-                (("sync", "download", "exclude_folders"), folders),
-                (("sync", "download", "exclude_extensions"), exts),
-                (("sync", "download", "exclude_installer_files"),
-                 bool(self.installer_check.isChecked())),
-            ])
+            update_config(
+                self.config_path,
+                [
+                    (("root_dir",), os.path.expanduser(root)),
+                    (("sync", "interval_minutes"), int(self.interval_spin.value())),
+                    (("sync", "only_favorites"), bool(self.only_favorites_check.isChecked())),
+                    (("sync", "archive_pages"), bool(self.archive_check.isChecked())),
+                    (("sync", "skip_empty_courses"), bool(self.empty_check.isChecked())),
+                    (("sync", "download", "concurrency"), int(self.concurrency_spin.value())),
+                    (("sync", "download", "exclude_folders"), folders),
+                    (("sync", "download", "exclude_extensions"), exts),
+                    (
+                        ("sync", "download", "exclude_installer_files"),
+                        bool(self.installer_check.isChecked()),
+                    ),
+                ],
+            )
         except OSError as exc:
             self._warn(f"保存配置失败：{exc}")
             return

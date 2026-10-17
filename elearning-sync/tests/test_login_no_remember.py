@@ -6,6 +6,7 @@ login_with_stored_credentials 取不到密码就抛“钥匙串中没有保存�
 更早的版本甚至直接抛 “API Token 为空”。正确行为是回退到本次登录已保存的
 会话 cookie，并把认证方式改写为 cookie。
 """
+
 from __future__ import annotations
 
 import json
@@ -16,17 +17,19 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
+import fudan_sync.password_login as pl  # noqa: E402
 from fudan_sync.auth import AuthError, CookieAuth, build_auth  # noqa: E402
 from fudan_sync.config import load_config  # noqa: E402
-import fudan_sync.password_login as pl  # noqa: E402
 
 USERNAME = "20300123456"
 
 
 def _write_cookie(cookie_file: str) -> None:
     with open(cookie_file, "w", encoding="utf-8") as handle:
-        json.dump({"cookies": [{"name": "_canvas_session", "value": "x",
-                                "domain": "", "path": "/"}]}, handle)
+        json.dump(
+            {"cookies": [{"name": "_canvas_session", "value": "x", "domain": "", "path": "/"}]},
+            handle,
+        )
 
 
 class NoRememberLoginTests(unittest.TestCase):
@@ -78,8 +81,9 @@ root_dir: ./files
     def test_remembered_password_relogins(self):
         """记住了密码：走静默重登，得到 cookie 认证。"""
         pl.load_password = lambda username: "secret"
-        pl.login_with_stored_credentials = lambda base, user, cookie: (
-            _write_cookie(cookie), None)[1]
+        pl.login_with_stored_credentials = lambda base, user, cookie: (_write_cookie(cookie), None)[
+            1
+        ]
         cfg = self._cfg("password")
         self.assertIsInstance(build_auth(cfg), CookieAuth)
 

@@ -13,14 +13,21 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import edu.fudan.elearning.sync.ui.AppContent
 
 class MainActivity : ComponentActivity() {
-    private val notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent { AppContent(viewModel(), ::requestNotificationPermission) }
     }
+
     private fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+        if (
+            Build.VERSION.SDK_INT >= 33 &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+                    PackageManager.PERMISSION_GRANTED
+        )
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     }
 }

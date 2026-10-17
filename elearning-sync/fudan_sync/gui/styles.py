@@ -1,25 +1,24 @@
-"""界面样式表：统一、克制的现代风格。
+"""复小学“书页蓝”界面系统：深色品牌栏、轻量工作区与清晰的状态色。"""
 
-复小学品牌配色：靛蓝（Indigo）为主色调，浅色背景 + 白色卡片，强调可读性。
-本文件与 icon.py、Android 端 ui/Theme.kt 共用同一套色板，保证双端风格一致。
-"""
 from __future__ import annotations
 
-FONT_FAMILY = ('"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", '
-               '"Noto Sans CJK SC", "WenQuanYi Micro Hei", "Segoe UI", sans-serif')
+FONT_FAMILY = (
+    '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", '
+    '"Noto Sans CJK SC", "WenQuanYi Micro Hei", "Segoe UI", sans-serif'
+)
 
-ACCENT = "#4F46E5"
-ACCENT_HOVER = "#4338CA"
-ACCENT_PRESSED = "#3730A3"
-BG = "#F6F7FC"
+ACCENT = "#2457D6"
+ACCENT_HOVER = "#1948BD"
+ACCENT_PRESSED = "#123A9C"
+BG = "#F5F7FB"
 CARD = "#FFFFFF"
-BORDER = "#E2E7F1"
-TEXT = "#1E2433"
-TEXT_SECONDARY = "#6B7488"
-TEXT_DISABLED = "#A2A9BB"
-SUCCESS = "#16A34A"
-WARNING = "#D97706"
-DANGER = "#D64545"
+BORDER = "#DCE2EC"
+TEXT = "#171B24"
+TEXT_SECONDARY = "#5E6878"
+TEXT_DISABLED = "#9AA3B2"
+SUCCESS = "#0A7C79"
+WARNING = "#B85C00"
+DANGER = "#C43D4D"
 
 QSS = f"""
 * {{
@@ -32,9 +31,48 @@ QWidget#root {{
     background: {BG};
 }}
 
+QFrame#appHeader {{
+    background: #102A56;
+    border: 1px solid #17386D;
+    border-radius: 18px;
+}}
+QLabel#brandTitle {{
+    color: #FFFFFF;
+    font-size: 20px;
+    font-weight: 700;
+}}
+QLabel#brandSubtitle {{
+    color: #B9C8E6;
+    font-size: 12px;
+}}
+QLabel#userChip {{
+    color: #EAF1FF;
+    background: #193968;
+    border: 1px solid #315184;
+    border-radius: 11px;
+    padding: 6px 12px;
+}}
+QPushButton#headerAction {{
+    color: #EEF4FF;
+    background: #193968;
+    border: 1px solid #315184;
+    padding: 7px 12px;
+}}
+QPushButton#headerAction:hover {{
+    color: #FFFFFF;
+    background: #245083;
+    border-color: #4E72A6;
+}}
+
 QFrame#card {{
     background: {CARD};
     border: 1px solid {BORDER};
+    border-radius: 16px;
+}}
+QFrame#metricCard {{
+    background: {CARD};
+    border: 1px solid {BORDER};
+    border-left: 4px solid {ACCENT};
     border-radius: 14px;
 }}
 
@@ -43,7 +81,7 @@ QLabel#cardTitle {{
     font-weight: 600;
 }}
 QLabel#statValue {{
-    font-size: 24px;
+    font-size: 22px;
     font-weight: 700;
     color: {TEXT};
 }}
@@ -66,8 +104,8 @@ QLabel#subtitleLabel {{
 }}
 
 QPushButton {{
-    border-radius: 9px;
-    padding: 8px 16px;
+    border-radius: 8px;
+    padding: 7px 14px;
     border: 1px solid {BORDER};
     background: {CARD};
 }}
@@ -114,7 +152,7 @@ QPushButton#danger:hover {{
 
 QLineEdit, QSpinBox, QComboBox {{
     border: 1px solid {BORDER};
-    border-radius: 9px;
+    border-radius: 8px;
     padding: 8px 10px;
     background: {CARD};
     selection-background-color: {ACCENT};
@@ -162,25 +200,25 @@ QProgressBar::chunk {{
 }}
 
 QTableWidget {{
-    background: transparent;
+    background: {CARD};
     border: none;
     gridline-color: transparent;
     outline: none;
 }}
 QTableWidget::item {{
-    padding: 8px 10px;
-    border-bottom: 1px solid #EEF1F7;
+    padding: 9px 11px;
+    border-bottom: 1px solid #EDF0F5;
 }}
 QTableWidget::item:selected {{
-    background: #EAF0FB;
+    background: #E4ECFF;
     color: {TEXT};
 }}
 QHeaderView::section {{
-    background: transparent;
+    background: #F8FAFD;
     color: {TEXT_SECONDARY};
     font-size: 12px;
     font-weight: 600;
-    padding: 6px 10px;
+    padding: 8px 10px;
     border: none;
     border-bottom: 1px solid {BORDER};
 }}
@@ -225,7 +263,7 @@ QToolTip {{
 }}
 
 QStatusBar {{
-    background: transparent;
+    background: #F0F3F8;
     color: {TEXT_SECONDARY};
     border-top: 1px solid {BORDER};
 }}
@@ -258,7 +296,8 @@ QDialog {{
 
 def apply_palette(app) -> None:
     """调色板层面的兜底，避免某些控件不受 QSS 影响。"""
-    from PySide6.QtGui import QPalette, QColor
+    from PySide6.QtGui import QColor, QPalette
+
     palette = app.palette()
     palette.setColor(QPalette.Window, QColor(BG))
     palette.setColor(QPalette.WindowText, QColor(TEXT))

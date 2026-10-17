@@ -4,13 +4,25 @@ import edu.fudan.elearning.sync.data.CourseStats
 import edu.fudan.elearning.sync.data.FileItem
 import edu.fudan.elearning.sync.data.Repo
 
-internal enum class LibraryFileFilter { ALL, UNREAD, DOWNLOADED, FAILED, PENDING, LOCKED }
+internal enum class LibraryFileFilter {
+    ALL,
+    UNREAD,
+    DOWNLOADED,
+    FAILED,
+    PENDING,
+    LOCKED,
+}
 
-internal fun filterLibraryCourses(courses: List<CourseStats>, query: String, term: String?): List<CourseStats> {
+internal fun filterLibraryCourses(
+    courses: List<CourseStats>,
+    query: String,
+    term: String?,
+): List<CourseStats> {
     val text = query.trim()
     return courses.filter {
         (term == null || it.course.term == term) &&
-            (text.isEmpty() || it.course.name.contains(text, ignoreCase = true) ||
+            (text.isEmpty() ||
+                it.course.name.contains(text, ignoreCase = true) ||
                 it.course.code.contains(text, ignoreCase = true))
     }
 }
@@ -19,20 +31,25 @@ internal fun filterLibraryCourses(courses: List<CourseStats>, query: String, ter
 internal fun filterLibraryFiles(
     files: List<Pair<FileItem, Repo.ReadingProgress?>>,
     query: String,
-    filter: LibraryFileFilter
+    filter: LibraryFileFilter,
 ): List<Pair<FileItem, Repo.ReadingProgress?>> {
     val text = query.trim()
     return files.filter { (file, progress) ->
-        val matchesText = text.isEmpty() || listOf(file.name, file.filename, file.folderPath)
-            .any { it.contains(text, ignoreCase = true) }
-        matchesText && when (filter) {
-            LibraryFileFilter.ALL -> true
-            LibraryFileFilter.UNREAD -> file.status == "downloaded" && (progress?.position ?: 0) <= 0
-            LibraryFileFilter.DOWNLOADED -> file.status == "downloaded"
-            LibraryFileFilter.FAILED -> file.status == "failed"
-            LibraryFileFilter.PENDING -> file.status == "pending"
-            LibraryFileFilter.LOCKED -> file.status == "locked"
-        }
+        val matchesText =
+            text.isEmpty() ||
+                listOf(file.name, file.filename, file.folderPath).any {
+                    it.contains(text, ignoreCase = true)
+                }
+        matchesText &&
+            when (filter) {
+                LibraryFileFilter.ALL -> true
+                LibraryFileFilter.UNREAD ->
+                    file.status == "downloaded" && (progress?.position ?: 0) <= 0
+                LibraryFileFilter.DOWNLOADED -> file.status == "downloaded"
+                LibraryFileFilter.FAILED -> file.status == "failed"
+                LibraryFileFilter.PENDING -> file.status == "pending"
+                LibraryFileFilter.LOCKED -> file.status == "locked"
+            }
     }
 }
 
@@ -43,11 +60,12 @@ internal fun sortFilesUnreadFirst(
     return unread + read.sortedByDescending { it.second?.updatedAt ?: "" }
 }
 
-internal fun sortLibraryFiles(files: List<Pair<FileItem, Repo.ReadingProgress?>>, sort: FileSort) = when (sort) {
-    FileSort.UNREAD -> sortFilesUnreadFirst(files)
-    FileSort.NAME -> files.sortedBy { it.first.name.lowercase(java.util.Locale.ROOT) }
-    FileSort.UPDATED -> files.sortedByDescending { it.first.updatedAt }
-}
+internal fun sortLibraryFiles(files: List<Pair<FileItem, Repo.ReadingProgress?>>, sort: FileSort) =
+    when (sort) {
+        FileSort.UNREAD -> sortFilesUnreadFirst(files)
+        FileSort.NAME -> files.sortedBy { it.first.name.lowercase(java.util.Locale.ROOT) }
+        FileSort.UPDATED -> files.sortedByDescending { it.first.updatedAt }
+    }
 
 internal fun progressText(progress: Repo.ReadingProgress?): String {
     if (progress == null || progress.position <= 0) return "未读"

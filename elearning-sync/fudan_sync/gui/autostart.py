@@ -1,4 +1,5 @@
 """开机自启动（Windows 注册表 / macOS LaunchAgent / Linux .desktop）。"""
+
 from __future__ import annotations
 
 import os
@@ -31,8 +32,8 @@ def is_autostart_enabled() -> bool:
     if sys.platform == "win32":
         try:
             import winreg
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
-                                winreg.KEY_READ) as key:
+
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_READ) as key:
                 value, _ = winreg.QueryValueEx(key, APP_DISPLAY_NAME)
                 return bool(value)
         except FileNotFoundError:
@@ -55,23 +56,20 @@ def set_autostart(enabled: bool) -> None:
 
 def _set_autostart_windows(enabled: bool) -> None:
     import winreg
+
     if enabled:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
-                            winreg.KEY_SET_VALUE) as key:
-            winreg.SetValueEx(key, APP_DISPLAY_NAME, 0, winreg.REG_SZ,
-                              _startup_target())
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, APP_DISPLAY_NAME, 0, winreg.REG_SZ, _startup_target())
         return
     try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0,
-                            winreg.KEY_SET_VALUE) as key:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
             winreg.DeleteValue(key, APP_DISPLAY_NAME)
     except FileNotFoundError:
         pass
 
 
 def _launchagent_path() -> str:
-    return os.path.expanduser(
-        "~/Library/LaunchAgents/com.fudan.elearning-sync.plist")
+    return os.path.expanduser("~/Library/LaunchAgents/com.fudan.elearning-sync.plist")
 
 
 def _set_autostart_mac(enabled: bool) -> None:
@@ -86,15 +84,15 @@ def _set_autostart_mac(enabled: bool) -> None:
         '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
         '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
         '<plist version="1.0">\n<dict>\n'
-        '  <key>Label</key><string>com.fudan.elearning-sync</string>\n'
-        '  <key>ProgramArguments</key>\n'
-        '  <array>\n'
-        f'    <string>{sys.executable}</string>\n'
-        f'    <string>{_project_root()}/gui.py</string>\n'
-        '    <string>--minimized</string>\n'
-        '  </array>\n'
-        '  <key>RunAtLoad</key><true/>\n'
-        '</dict>\n</plist>\n'
+        "  <key>Label</key><string>com.fudan.elearning-sync</string>\n"
+        "  <key>ProgramArguments</key>\n"
+        "  <array>\n"
+        f"    <string>{sys.executable}</string>\n"
+        f"    <string>{_project_root()}/gui.py</string>\n"
+        "    <string>--minimized</string>\n"
+        "  </array>\n"
+        "  <key>RunAtLoad</key><true/>\n"
+        "</dict>\n</plist>\n"
     )
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(content)

@@ -1,5 +1,6 @@
 package edu.fudan.elearning.sync.search
 
+import java.nio.charset.Charset
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -7,19 +8,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
-import java.io.File
-import java.nio.charset.Charset
 
 /**
  * 搜索分词器与查询表达式的 JVM 单测。
  *
- * 与桌面端 tests/test_search_index.py 的 TokenizerTests/MatchQueryTests
- * 是同一组断言的两侧实现，保证双端搜索语义一致。
+ * 与桌面端 tests/test_search_index.py 的 TokenizerTests/MatchQueryTests 是同一组断言的两侧实现，保证双端搜索语义一致。
  */
 class SearchIndexTest {
 
-    @get:Rule
-    val tempFolder = TemporaryFolder()
+    @get:Rule val tempFolder = TemporaryFolder()
 
     @Test
     fun cjkRunGetsUnigramsAndBigrams() {
@@ -98,7 +95,10 @@ class SearchIndexTest {
 
     @Test
     fun capTruncates() {
-        assertEquals(SearchIndex.MAX_INDEX_CHARS, SearchIndex.cap("甲".repeat(SearchIndex.MAX_INDEX_CHARS + 100)).length)
+        assertEquals(
+            SearchIndex.MAX_INDEX_CHARS,
+            SearchIndex.cap("甲".repeat(SearchIndex.MAX_INDEX_CHARS + 100)).length,
+        )
     }
 
     @Test
@@ -124,8 +124,9 @@ class SearchIndexTest {
 
     @Test
     fun stripHtmlDropsScriptStyle() {
-        val html = "<html><body><h1>实验报告</h1><script>var x = '秘密';</script>" +
-            "<style>.a{color:red}</style><p>内容甲</p></body></html>"
+        val html =
+            "<html><body><h1>实验报告</h1><script>var x = '秘密';</script>" +
+                "<style>.a{color:red}</style><p>内容甲</p></body></html>"
         val text = TextExtractor.stripHtml(html)
         assertTrue("实验报告" in text)
         assertTrue("内容甲" in text)

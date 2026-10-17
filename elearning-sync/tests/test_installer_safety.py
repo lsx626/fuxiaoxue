@@ -1,7 +1,7 @@
 """Windows 安装器的数据保留回归测试。"""
-from pathlib import Path
-import re
 
+import re
+from pathlib import Path
 
 SETUP_SCRIPT = Path(__file__).resolve().parents[1] / "installer" / "setup.iss"
 

@@ -1,18 +1,17 @@
 package edu.fudan.elearning.sync.sync
 
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
-import java.io.File
 
 /** 可靠下载决策逻辑的单测（`.part`、续传、长度校验、同名避让、登录页嗅探）。 */
 class DownloadPlanTest {
 
-    @get:Rule
-    val temp = TemporaryFolder()
+    @get:Rule val temp = TemporaryFolder()
 
     @Test
     fun partFile_addsSuffixNextToTarget() {
@@ -102,12 +101,13 @@ class DownloadPlanTest {
 
     @Test
     fun loginPageSniff_detectsAuthRedirectHtml() {
-        val canvasLogin = "<!DOCTYPE html><html><head><title>复旦大学统一身份认证</title>" +
-            "<body>请登录</body></html>"
+        val canvasLogin =
+            "<!DOCTYPE html><html><head><title>复旦大学统一身份认证</title>" + "<body>请登录</body></html>"
         assertTrue(DownloadPlan.looksLikeLoginPage("text/html; charset=utf-8", canvasLogin))
 
-        val idpRedirect = "<html><head><meta http-equiv=\"refresh\" " +
-            "content=\"0;url=https://id.fudan.edu.cn/idp/authn/authExecute\"></head></html>"
+        val idpRedirect =
+            "<html><head><meta http-equiv=\"refresh\" " +
+                "content=\"0;url=https://id.fudan.edu.cn/idp/authn/authExecute\"></head></html>"
         assertTrue(DownloadPlan.looksLikeLoginPage("text/html", idpRedirect))
     }
 
@@ -148,7 +148,9 @@ class DownloadPlanTest {
         val part = DownloadPlan.partFile(dest)
         part.writeBytes("头部已被".toByteArray(Charsets.UTF_8))
 
-        DownloadPlan.partOutputStream(part, append = true).use { it.write("续传完成".toByteArray(Charsets.UTF_8)) }
+        DownloadPlan.partOutputStream(part, append = true).use {
+            it.write("续传完成".toByteArray(Charsets.UTF_8))
+        }
 
         val content = part.readText(Charsets.UTF_8)
         assertEquals("头部已被续传完成", content)
@@ -161,7 +163,9 @@ class DownloadPlanTest {
         val part = DownloadPlan.partFile(dest)
         part.writeBytes("过时的旧内容".toByteArray(Charsets.UTF_8))
 
-        DownloadPlan.partOutputStream(part, append = false).use { it.write("全新".toByteArray(Charsets.UTF_8)) }
+        DownloadPlan.partOutputStream(part, append = false).use {
+            it.write("全新".toByteArray(Charsets.UTF_8))
+        }
 
         assertEquals("全新", part.readText(Charsets.UTF_8))
     }

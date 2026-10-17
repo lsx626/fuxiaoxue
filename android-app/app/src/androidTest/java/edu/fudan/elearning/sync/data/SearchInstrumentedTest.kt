@@ -17,8 +17,7 @@ import org.junit.runner.RunWith
 /**
  * 全文搜索 / 作业截止日期 / 变更摘要的插桩测试（真机/模拟器）。
  *
- * 需要真机 SQLite：FTS4 虚拟表、snippet 函数与迁移都只在设备上能验证
- * （JVM 单测没有 Android 的 SQLite 实现）。
+ * 需要真机 SQLite：FTS4 虚拟表、snippet 函数与迁移都只在设备上能验证 （JVM 单测没有 Android 的 SQLite 实现）。
  */
 @RunWith(AndroidJUnit4::class)
 class SearchInstrumentedTest {
@@ -31,23 +30,18 @@ class SearchInstrumentedTest {
         context = ApplicationProvider.getApplicationContext()
         dbFile = context.getDatabasePath("fudan_sync.db")
         dbFile.parentFile?.mkdirs()
-        listOf("", "-wal", "-shm").forEach { suffix ->
-            java.io.File(dbFile.path + suffix).delete()
-        }
+        listOf("", "-wal", "-shm").forEach { suffix -> java.io.File(dbFile.path + suffix).delete() }
     }
 
     @After
     fun tearDown() {
-        listOf("", "-wal", "-shm").forEach { suffix ->
-            java.io.File(dbFile.path + suffix).delete()
-        }
+        listOf("", "-wal", "-shm").forEach { suffix -> java.io.File(dbFile.path + suffix).delete() }
     }
 
     private fun tables(db: SQLiteDatabase): Set<String> {
         val names = mutableSetOf<String>()
-        db.rawQuery(
-            "SELECT name FROM sqlite_master WHERE type IN ('table','view')", null
-        ).use { cursor ->
+        db.rawQuery("SELECT name FROM sqlite_master WHERE type IN ('table','view')", null).use {
+            cursor ->
             while (cursor.moveToNext()) names.add(cursor.getString(0))
         }
         return names
@@ -124,8 +118,13 @@ class SearchInstrumentedTest {
         repo.upsertCourses(listOf(Course(id = 1, name = "机器学习导论", code = "CS229", term = "2025秋")))
         repo.upsertFile(
             FileItem(
-                fileId = 100, courseId = 1, name = "lec1.txt", filename = "lec1.txt",
-                localPath = "/tmp/lec1.txt", size = 30, status = "downloaded"
+                fileId = 100,
+                courseId = 1,
+                name = "lec1.txt",
+                filename = "lec1.txt",
+                localPath = "/tmp/lec1.txt",
+                size = 30,
+                status = "downloaded",
             )
         )
         repo.upsertFileIndex(100, "lec1.txt", "本节讲授支持向量机与核技巧")
@@ -143,8 +142,13 @@ class SearchInstrumentedTest {
         val repo = Repo(context)
         repo.upsertFile(
             FileItem(
-                fileId = 101, courseId = 0, name = "hidden.txt", filename = "hidden.txt",
-                localPath = "/tmp/hidden.txt", size = 30, status = "downloaded"
+                fileId = 101,
+                courseId = 0,
+                name = "hidden.txt",
+                filename = "hidden.txt",
+                localPath = "/tmp/hidden.txt",
+                size = 30,
+                status = "downloaded",
             )
         )
         repo.upsertFileIndex(101, "hidden.txt", "这里有一段关于神经网络的讨论")
@@ -161,8 +165,13 @@ class SearchInstrumentedTest {
         val repo = Repo(context)
         repo.upsertFile(
             FileItem(
-                fileId = 102, courseId = 0, name = "b.txt", filename = "b.txt",
-                localPath = "/tmp/b.txt", size = 30, status = "downloaded"
+                fileId = 102,
+                courseId = 0,
+                name = "b.txt",
+                filename = "b.txt",
+                localPath = "/tmp/b.txt",
+                size = 30,
+                status = "downloaded",
             )
         )
         repo.upsertFileIndex(102, "b.txt", "离散数学图论")
@@ -174,13 +183,18 @@ class SearchInstrumentedTest {
     }
 
     @Test
-    fun remoteMissingExcluded() {
+    fun legacyRemoteMissingExcluded() {
         val helper = DatabaseHelper(context)
         val repo = Repo(context)
         repo.upsertFile(
             FileItem(
-                fileId = 103, courseId = 0, name = "d.txt", filename = "d.txt",
-                localPath = "/tmp/d.txt", size = 30, status = "remote_missing"
+                fileId = 103,
+                courseId = 0,
+                name = "d.txt",
+                filename = "d.txt",
+                localPath = "/tmp/d.txt",
+                size = 30,
+                status = "remote_missing",
             )
         )
         repo.upsertFileIndex(103, "d.txt", "离散数学图论")
@@ -200,9 +214,13 @@ class SearchInstrumentedTest {
 
         repo.upsertFile(
             FileItem(
-                fileId = 104, courseId = 0, name = textFile.name, filename = textFile.name,
-                localPath = textFile.absolutePath, size = textFile.length(),
-                status = "downloaded"
+                fileId = 104,
+                courseId = 0,
+                name = textFile.name,
+                filename = textFile.name,
+                localPath = textFile.absolutePath,
+                size = textFile.length(),
+                status = "downloaded",
             )
         )
         // 升级前老库：文件已下载但尚未索引
@@ -222,10 +240,11 @@ class SearchInstrumentedTest {
         val helper = DatabaseHelper(context)
         val repo = Repo(context)
         repo.upsertAssignments(
-            1, listOf(
+            1,
+            listOf(
                 Assignment(id = 1, courseId = 1, name = "作业一", dueAt = "2026-10-05T23:59:00Z"),
-                Assignment(id = 2, courseId = 1, name = "作业二", dueAt = "2026-10-01T23:59:00Z")
-            )
+                Assignment(id = 2, courseId = 1, name = "作业二", dueAt = "2026-10-01T23:59:00Z"),
+            ),
         )
         val list = repo.assignments()
         assertEquals(2, list.size)
@@ -239,10 +258,18 @@ class SearchInstrumentedTest {
         val helper = DatabaseHelper(context)
         val repo = Repo(context)
         repo.upsertCourses(
-            listOf(Course(id = 1, name = "机器学习导论 DATA130012.01", code = "DATA130012.01", term = "2026秋"))
+            listOf(
+                Course(
+                    id = 1,
+                    name = "机器学习导论 DATA130012.01",
+                    code = "DATA130012.01",
+                    term = "2026秋",
+                )
+            )
         )
         repo.upsertAssignments(
-            1, listOf(Assignment(id = 1, courseId = 1, name = "作业一", dueAt = "2026-10-05T23:59:00Z"))
+            1,
+            listOf(Assignment(id = 1, courseId = 1, name = "作业一", dueAt = "2026-10-05T23:59:00Z")),
         )
         val list = repo.assignments()
         assertEquals(1, list.size)
@@ -258,16 +285,37 @@ class SearchInstrumentedTest {
         val repo = Repo(context)
         repo.upsertCourses(listOf(Course(id = 1, name = "机器学习导论", code = "CS229", term = "2025秋")))
         repo.upsertFile(
-            FileItem(fileId = 100, courseId = 1, name = "lec1.txt", filename = "lec1.txt",
-                localPath = "/tmp/lec1.txt", size = 30, status = "downloaded")
+            FileItem(
+                fileId = 100,
+                courseId = 1,
+                name = "lec1.txt",
+                filename = "lec1.txt",
+                localPath = "/tmp/lec1.txt",
+                size = 30,
+                status = "downloaded",
+            )
         )
         repo.upsertFile(
-            FileItem(fileId = 101, courseId = 1, name = "lec2.txt", filename = "lec2.txt",
-                localPath = "/tmp/lec2.txt", size = 30, status = "remote_missing")
+            FileItem(
+                fileId = 101,
+                courseId = 1,
+                name = "lec2.txt",
+                filename = "lec2.txt",
+                localPath = "/tmp/lec2.txt",
+                size = 30,
+                status = "remote_missing",
+            )
         )
         repo.upsertFile(
-            FileItem(fileId = 102, courseId = 1, name = "lec3.txt", filename = "lec3.txt",
-                localPath = "/tmp/lec3.txt", size = 30, status = "failed")
+            FileItem(
+                fileId = 102,
+                courseId = 1,
+                name = "lec3.txt",
+                filename = "lec3.txt",
+                localPath = "/tmp/lec3.txt",
+                size = 30,
+                status = "failed",
+            )
         )
 
         // 界面列表：远端已删除的不返回
